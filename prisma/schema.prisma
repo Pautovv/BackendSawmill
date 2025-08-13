@@ -1,0 +1,128 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Item {
+  id        Int      @id @default(autoincrement())
+  name      String
+  quantity  Int      @default(0)
+  unit      String   @default("шт")
+  category  Category
+  location  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  operations       Operation[]    @relation("OperationMachines")
+  machineSteps     PassportStep[] @relation("MachineSteps")
+  rawMaterialSteps PassportStep[] @relation("RawMaterialSteps")
+}
+
+model Operation {
+  id       Int       @id @default(autoincrement())
+  name     String
+  machines Item[]    @relation("OperationMachines")
+  profiles Profile[] @relation("ProfileOperations")
+
+  passportSteps PassportStep[]
+}
+
+model Profile {
+  id         Int         @id @default(autoincrement())
+  name       String
+  operations Operation[] @relation("ProfileOperations")
+
+  passportSteps PassportStep[]
+}
+
+enum Category {
+  LOGS
+  LUMBER_NATURAL
+  LUMBER_DRY
+  PLANED_PRODUCTS
+  PAINTS_VARNISHES
+  FURNITURE
+  TOOLS
+  MACHINES
+}
+
+model Passport {
+  id          Int      @id @default(autoincrement())
+  productName String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  steps PassportStep[]
+  tasks Task[]
+
+  @@index([productName])
+}
+
+model PassportStep {
+  id         Int      @id @default(autoincrement())
+  passport   Passport @relation(fields: [passportId], references: [id])
+  passportId Int
+
+  machine   Item? @relation("MachineSteps", fields: [machineId], references: [id])
+  machineId Int?
+
+  operation   Operation? @relation(fields: [operationId], references: [id])
+  operationId Int?
+
+  profile   Profile? @relation(fields: [profileId], references: [id])
+  profileId Int?
+
+  rawMaterial   Item? @relation("RawMaterialSteps", fields: [rawMaterialId], references: [id])
+  rawMaterialId Int?
+
+  repeats Int @default(1)
+}
+
+model Task {
+  id         Int      @id @default(autoincrement())
+  passport   Passport @relation(fields: [passportId], references: [id])
+  passportId Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  steps TaskStep[]
+}
+
+model TaskStep {
+  id         Int  @id @default(autoincrement())
+  task       Task @relation(fields: [taskId], references: [id])
+  taskId     Int
+  stepNumber Int
+
+  mainWorkerId Int
+  mainWorker   User @relation("MainWorkerSteps", fields: [mainWorkerId], references: [id])
+
+  secondaryWorkers TaskSecondaryWorker[] @relation("StepSecondaryWorkers")
+}
+
+model TaskSecondaryWorker {
+  id     Int      @id @default(autoincrement())
+  step   TaskStep @relation("StepSecondaryWorkers", fields: [stepId], references: [id])
+  stepId Int
+  user   User     @relation("UserSecondarySteps", fields: [userId], references: [id])
+  userId Int
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  password  String
+  firstName String
+  lastName  String
+  avatarUrl String?
+  role      String   @default("user")
+  createdAt DateTime @default(now())
+  telegramId String?
+
+  mainTaskSteps  TaskStep[]            @relation("MainWorkerSteps")
+  secondarySteps TaskSecondaryWorker[] @relation("UserSecondarySteps")
+}
