@@ -1,136 +1,111 @@
-generator client {
-  provider = "prisma-client-js"
-}
-
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-model Category { 
-  id Int @id @default(autoincrement()) 
-  name String @unique  
-  path String @unique  
-  items Item[] 
-  units Unit[] 
-  createdAt DateTime @default(now()) 
-} 
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Category {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  path      String   @unique
+  items     Item[]
+  units     Unit[]
+  createdAt DateTime @default(now())
+}
 
 model Item {
-  id         Int      @id @default(autoincrement())
-  category   Category @relation(fields: [categoryId], references: [id])
-  categoryId Int
-  name       String
-  createdAt  DateTime @default(now())
-  fields     ItemField[]
+  id               Int                @id @default(autoincrement())
+  category         Category           @relation(fields: [categoryId], references: [id])
+  categoryId       Int
+  name             String
+  createdAt        DateTime           @default(now())
+  fields           ItemField[]
+  operations       Operation[]
+  techCards        TechCard[]
+  TechStep         TechStep[]
+  TechStepMaterial TechStepMaterial[]
 }
 
 model ItemField {
   id     Int    @id @default(autoincrement())
-  item   Item   @relation(fields: [itemId], references: [id])
+  item   Item   @relation(fields: [itemId], references: [id], onDelete: Cascade)
   itemId Int
   key    String
   value  String
 }
 
-model Unit { 
-  id Int @id @default(autoincrement()) 
-  unit String 
-  factor Float 
-  category Category @relation(fields: [categoryId], references: [id]) 
-  categoryId Int 
+model Unit {
+  id               Int                @id @default(autoincrement())
+  unit             String
+  factor           Float
+  category         Category           @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  categoryId       Int
+  TechStepMaterial TechStepMaterial[]
 }
 
 model Operation {
-  id       Int       @id @default(autoincrement())
+  id       Int        @id @default(autoincrement())
   name     String
-  //machines Item[]    @relation("OperationMachines")
-  profiles Profile[] @relation("ProfileOperations")
-
-  passportSteps PassportStep[]
+  machines Item[]
+  TechStep TechStep[]
 }
 
-model Profile {
-  id         Int         @id @default(autoincrement())
-  name       String
-  operations Operation[] @relation("ProfileOperations")
-
-  passportSteps PassportStep[]
+model TechCard {
+  id        Int        @id @default(autoincrement())
+  item      Item?      @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  itemId    Int? 
+  name      String
+  steps     TechStep[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
 }
 
-model Passport {
-  id          Int      @id @default(autoincrement())
-  productName String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+model TechStep {
+  id            Int                @id @default(autoincrement())
+  techCard      TechCard           @relation(fields: [techCardId], references: [id], onDelete: Cascade)
+  techCardId    Int
+  order         Int
+  name          String
+  operation     Operation?         @relation(fields: [operationId], references: [id], onDelete: SetNull)
+  operationId   Int?
+  machine       Item?              @relation(fields: [machineItemId], references: [id], onDelete: SetNull)
+  machineItemId Int?
+  materials     TechStepMaterial[]
+  fields        TechStepField[]
+  createdAt     DateTime           @default(now())
 
-  steps PassportStep[]
-  tasks Task[]
-
-  @@index([productName])
+  @@unique([techCardId, order])
 }
 
-model PassportStep {
-  id         Int      @id @default(autoincrement())
-  passport   Passport @relation(fields: [passportId], references: [id])
-  passportId Int
-
-  //machine   Item? @relation("MachineSteps", fields: [machineId], references: [id])
-  machineId Int?
-
-  operation   Operation? @relation(fields: [operationId], references: [id])
-  operationId Int?
-
-  profile   Profile? @relation(fields: [profileId], references: [id])
-  profileId Int?
-
-  //rawMaterial   Item? @relation("RawMaterialSteps", fields: [rawMaterialId], references: [id])
-  rawMaterialId Int?
-
-  repeats Int @default(1)
+model TechStepMaterial {
+  id             Int      @id @default(autoincrement())
+  step           TechStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  stepId         Int
+  material       Item     @relation(fields: [materialItemId], references: [id], onDelete: Restrict)
+  materialItemId Int
+  quantity       Float
+  unit           Unit?    @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  unitId         Int?
 }
 
-model Task {
-  id         Int      @id @default(autoincrement())
-  passport   Passport @relation(fields: [passportId], references: [id])
-  passportId Int
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  steps TaskStep[]
-}
-
-model TaskStep {
-  id         Int  @id @default(autoincrement())
-  task       Task @relation(fields: [taskId], references: [id])
-  taskId     Int
-  stepNumber Int
-
-  mainWorkerId Int
-  mainWorker   User @relation("MainWorkerSteps", fields: [mainWorkerId], references: [id])
-
-  secondaryWorkers TaskSecondaryWorker[] @relation("StepSecondaryWorkers")
-}
-
-model TaskSecondaryWorker {
+model TechStepField {
   id     Int      @id @default(autoincrement())
-  step   TaskStep @relation("StepSecondaryWorkers", fields: [stepId], references: [id])
+  step   TechStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
   stepId Int
-  user   User     @relation("UserSecondarySteps", fields: [userId], references: [id])
-  userId Int
+  key    String
+  value  String
 }
 
 model User {
-  id         Int      @id @default(autoincrement())
-  email      String   @unique
-  password   String
-  firstName  String
-  lastName   String
-  avatarUrl  String?
-  role       String   @default("user")
-  createdAt  DateTime @default(now())
-  telegramId String?
-
-  mainTaskSteps  TaskStep[]            @relation("MainWorkerSteps")
-  secondarySteps TaskSecondaryWorker[] @relation("UserSecondarySteps")
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  password  String
+  firstName String
+  lastName  String
+  avatarUrl String?
+  role      String   @default("user")
+  createdAt DateTime @default(now())
 }

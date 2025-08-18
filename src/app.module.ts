@@ -7,9 +7,12 @@ import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { CategoryModule } from './category/category.module';
 import { ItemsModule } from './items/items.module';
+import { OperationModule } from './operations/operations.module';
+import { TechCardModule } from './tech-card/tech-card.module';
+import { UnitsModule } from './units/units.module';
 
 @Module({
-  imports: [PrismaModule, AuthModule, CategoryModule, ItemsModule ],
+  imports: [PrismaModule, AuthModule, CategoryModule, ItemsModule, OperationModule, TechCardModule, UnitsModule],
 })
 export class AppModule {}
 
