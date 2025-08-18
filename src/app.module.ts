@@ -1,15 +1,15 @@
 import { Module } from '@nestjs/common';
-import { InventoryModule } from './inventory/inventory.module';
 import { PrismaModule } from './prisma/prisma.module';
-import { OperationModule } from './operations/operations.module';
-import { ProfilesModule } from './profiles/profiles.module';
-import { PassportModule } from './passport/passport.module';
-import { TaskModule } from './tasks/tasks.module';
-import { WorkersModule } from './workers/workers.module';
+//import { OperationModule } from './operations/operations.module';
+//import { ProfilesModule } from './profiles/profiles.module';
+//import { PassportModule } from './passport/passport.module';
+//import { TaskModule } from './tasks/tasks.module';
 import { AuthModule } from './auth/auth.module';
+import { CategoryModule } from './category/category.module';
+import { ItemsModule } from './items/items.module';
 
 @Module({
-  imports: [InventoryModule, PrismaModule, OperationModule, ProfilesModule, PassportModule, TaskModule, WorkersModule, AuthModule],
+  imports: [PrismaModule, AuthModule, CategoryModule, ItemsModule ],
 })
 export class AppModule {}
 

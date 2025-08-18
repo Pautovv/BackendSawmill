@@ -7,25 +7,44 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Item {
-  id        Int      @id @default(autoincrement())
-  name      String
-  quantity  Int      @default(0)
-  unit      String   @default("шт")
-  category  Category
-  location  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+model Category { 
+  id Int @id @default(autoincrement()) 
+  name String @unique  
+  path String @unique  
+  items Item[] 
+  units Unit[] 
+  createdAt DateTime @default(now()) 
+} 
 
-  operations       Operation[]    @relation("OperationMachines")
-  machineSteps     PassportStep[] @relation("MachineSteps")
-  rawMaterialSteps PassportStep[] @relation("RawMaterialSteps")
+model Item {
+  id         Int      @id @default(autoincrement())
+  category   Category @relation(fields: [categoryId], references: [id])
+  categoryId Int
+  name       String
+  createdAt  DateTime @default(now())
+  fields     ItemField[]
+}
+
+model ItemField {
+  id     Int    @id @default(autoincrement())
+  item   Item   @relation(fields: [itemId], references: [id])
+  itemId Int
+  key    String
+  value  String
+}
+
+model Unit { 
+  id Int @id @default(autoincrement()) 
+  unit String 
+  factor Float 
+  category Category @relation(fields: [categoryId], references: [id]) 
+  categoryId Int 
 }
 
 model Operation {
   id       Int       @id @default(autoincrement())
   name     String
-  machines Item[]    @relation("OperationMachines")
+  //machines Item[]    @relation("OperationMachines")
   profiles Profile[] @relation("ProfileOperations")
 
   passportSteps PassportStep[]
@@ -37,17 +56,6 @@ model Profile {
   operations Operation[] @relation("ProfileOperations")
 
   passportSteps PassportStep[]
-}
-
-enum Category {
-  LOGS
-  LUMBER_NATURAL
-  LUMBER_DRY
-  PLANED_PRODUCTS
-  PAINTS_VARNISHES
-  FURNITURE
-  TOOLS
-  MACHINES
 }
 
 model Passport {
@@ -67,7 +75,7 @@ model PassportStep {
   passport   Passport @relation(fields: [passportId], references: [id])
   passportId Int
 
-  machine   Item? @relation("MachineSteps", fields: [machineId], references: [id])
+  //machine   Item? @relation("MachineSteps", fields: [machineId], references: [id])
   machineId Int?
 
   operation   Operation? @relation(fields: [operationId], references: [id])
@@ -76,7 +84,7 @@ model PassportStep {
   profile   Profile? @relation(fields: [profileId], references: [id])
   profileId Int?
 
-  rawMaterial   Item? @relation("RawMaterialSteps", fields: [rawMaterialId], references: [id])
+  //rawMaterial   Item? @relation("RawMaterialSteps", fields: [rawMaterialId], references: [id])
   rawMaterialId Int?
 
   repeats Int @default(1)
@@ -113,14 +121,14 @@ model TaskSecondaryWorker {
 }
 
 model User {
-  id        Int      @id @default(autoincrement())
-  email     String   @unique
-  password  String
-  firstName String
-  lastName  String
-  avatarUrl String?
-  role      String   @default("user")
-  createdAt DateTime @default(now())
+  id         Int      @id @default(autoincrement())
+  email      String   @unique
+  password   String
+  firstName  String
+  lastName   String
+  avatarUrl  String?
+  role       String   @default("user")
+  createdAt  DateTime @default(now())
   telegramId String?
 
   mainTaskSteps  TaskStep[]            @relation("MainWorkerSteps")
