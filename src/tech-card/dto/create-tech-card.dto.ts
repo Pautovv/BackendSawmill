@@ -6,6 +6,7 @@ export class CreateTechCardDto {
     @IsString()
     @IsNotEmpty()
     name!: string;
+    itemId?: number;
 
     @IsArray()
     @ValidateNested({ each: true })

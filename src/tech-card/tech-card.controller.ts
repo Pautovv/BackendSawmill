@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseIntPipe, Post, Query } from '@nestjs/common';
 import { TechCardService } from './tech-card.service';
 import { CreateTechCardDto } from './dto/create-tech-card.dto';
 import { ReorderStepsDto } from './dto/reorder-steps.dto';
@@ -13,8 +13,8 @@ export class TechCardController {
     }
 
     @Get('tech-cards')
-    findAll() {
-        return this.service.findAll();
+    findAll(@Query('search') search?: string) {
+        return this.service.findAll(search);
     }
 
     @Get('tech-cards/:id')

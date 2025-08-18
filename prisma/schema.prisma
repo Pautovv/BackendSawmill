@@ -56,26 +56,28 @@ model Operation {
 model TechCard {
   id        Int        @id @default(autoincrement())
   item      Item?      @relation(fields: [itemId], references: [id], onDelete: SetNull)
-  itemId    Int? 
+  itemId    Int?
   name      String
   steps     TechStep[]
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
+  Task      Task[]
 }
 
 model TechStep {
-  id            Int                @id @default(autoincrement())
-  techCard      TechCard           @relation(fields: [techCardId], references: [id], onDelete: Cascade)
-  techCardId    Int
-  order         Int
-  name          String
-  operation     Operation?         @relation(fields: [operationId], references: [id], onDelete: SetNull)
-  operationId   Int?
-  machine       Item?              @relation(fields: [machineItemId], references: [id], onDelete: SetNull)
-  machineItemId Int?
-  materials     TechStepMaterial[]
-  fields        TechStepField[]
-  createdAt     DateTime           @default(now())
+  id                 Int                  @id @default(autoincrement())
+  techCard           TechCard             @relation(fields: [techCardId], references: [id], onDelete: Cascade)
+  techCardId         Int
+  order              Int
+  name               String
+  operation          Operation?           @relation(fields: [operationId], references: [id], onDelete: SetNull)
+  operationId        Int?
+  machine            Item?                @relation(fields: [machineItemId], references: [id], onDelete: SetNull)
+  machineItemId      Int?
+  materials          TechStepMaterial[]
+  fields             TechStepField[]
+  createdAt          DateTime             @default(now())
+  TaskStepAssignment TaskStepAssignment[]
 
   @@unique([techCardId, order])
 }
@@ -100,12 +102,89 @@ model TechStepField {
 }
 
 model User {
-  id        Int      @id @default(autoincrement())
-  email     String   @unique
-  password  String
-  firstName String
-  lastName  String
-  avatarUrl String?
-  role      String   @default("user")
-  createdAt DateTime @default(now())
+  id                   Int                    @id @default(autoincrement())
+  email                String                 @unique
+  password             String
+  firstName            String
+  lastName             String
+  avatarUrl            String?
+  role                 String                 @default("user")
+  createdAt            DateTime               @default(now())
+  TaskWorkerAssignment TaskWorkerAssignment[]
+  TaskDocument         TaskDocument[]
+}
+
+enum TaskStatus {
+  DRAFT
+  ACTIVE
+  DONE
+  CANCELLED
+}
+
+enum WorkerRole {
+  LEAD
+  MEMBER
+}
+
+enum DocumentStatus {
+  NEW
+  IN_PROGRESS
+  DONE
+}
+
+model Task {
+  id              Int                  @id @default(autoincrement())
+  techCard        TechCard             @relation(fields: [techCardId], references: [id], onDelete: Cascade)
+  techCardId      Int
+  name            String
+  status          TaskStatus           @default(ACTIVE)
+  fields          TaskField[]
+  stepAssignments TaskStepAssignment[]
+  documents       TaskDocument[]
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+}
+
+model TaskField {
+  id     Int    @id @default(autoincrement())
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId Int
+  key    String
+  value  String
+}
+
+model TaskStepAssignment {
+  id      Int                    @id @default(autoincrement())
+  task    Task                   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId  Int
+  step    TechStep               @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  stepId  Int
+  workers TaskWorkerAssignment[]
+
+  @@unique([taskId, stepId])
+}
+
+model TaskWorkerAssignment {
+  id               Int                @id @default(autoincrement())
+  stepAssignment   TaskStepAssignment @relation(fields: [stepAssignmentId], references: [id], onDelete: Cascade)
+  stepAssignmentId Int
+  user             User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId           Int
+  role             WorkerRole
+
+  @@unique([stepAssignmentId, userId])
+}
+
+model TaskDocument {
+  id        Int            @id @default(autoincrement())
+  task      Task           @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId    Int
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    Int
+  status    DocumentStatus @default(NEW)
+  content   Json
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@unique([taskId, userId])
 }

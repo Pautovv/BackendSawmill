@@ -10,9 +10,11 @@ import { ItemsModule } from './items/items.module';
 import { OperationModule } from './operations/operations.module';
 import { TechCardModule } from './tech-card/tech-card.module';
 import { UnitsModule } from './units/units.module';
+import { TasksModule } from './tasks/tasks.module';
+import { UsersModule } from './users/users.module';
 
 @Module({
-  imports: [PrismaModule, AuthModule, CategoryModule, ItemsModule, OperationModule, TechCardModule, UnitsModule],
+  imports: [PrismaModule, AuthModule, CategoryModule, ItemsModule, OperationModule, TechCardModule, UnitsModule, TasksModule, UsersModule],
 })
 export class AppModule {}
 
