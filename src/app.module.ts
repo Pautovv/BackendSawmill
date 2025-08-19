@@ -12,9 +12,10 @@ import { TechCardModule } from './tech-card/tech-card.module';
 import { UnitsModule } from './units/units.module';
 import { TasksModule } from './tasks/tasks.module';
 import { UsersModule } from './users/users.module';
+import { DocumentModule } from './document/document.module';
 
 @Module({
-  imports: [PrismaModule, AuthModule, CategoryModule, ItemsModule, OperationModule, TechCardModule, UnitsModule, TasksModule, UsersModule],
+  imports: [PrismaModule, AuthModule, CategoryModule, ItemsModule, OperationModule, TechCardModule, UnitsModule, TasksModule, UsersModule, DocumentModule],
 })
 export class AppModule {}
 

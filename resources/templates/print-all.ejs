@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <title>Печать всех документов — Задание <%= taskName %></title>
+  <style>
+    @page { size: A4; margin: 10mm 10mm; }
+    body { background: #fff; }
+    .doc { page-break-after: always; }
+    .doc:last-child { page-break-after: auto; }
+  </style>
+  <script>
+    window.addEventListener('load', () => {
+      // Немного подождём, чтобы браузер дорисовал всё
+      setTimeout(() => window.print(), 300);
+    });
+  </script>
+</head>
+<body>
+  <% sections.forEach(function(html, idx){ %>
+    <div class="doc"><%- html %></div>
+  <% }) %>
+</body>
+</html>

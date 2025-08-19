@@ -1,10 +1,11 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { DocumentRenderService } from '../document/document.service';
 
 @Injectable()
 export class TasksService {
-    constructor(private prisma: PrismaService) { }
+    constructor(private prisma: PrismaService, private renderer: DocumentRenderService,) { }
 
     async listTechCards(search?: string) {
         const where = search
@@ -54,15 +55,15 @@ export class TasksService {
         name?: string;
         fields?: { key: string; value: string }[];
         assignments: Array<{ stepId: number; leadUserIds: number[]; memberUserIds: number[] }>;
+        preGeneratePdfs?: boolean;
     }) {
-        const { techCardId, name, fields = [], assignments = [] } = payload;
+        const { techCardId, name, fields = [], assignments = [], preGeneratePdfs = true } = payload;
 
         const techCard = await this.getTechCardDetails(techCardId);
         if (!assignments.length) {
             throw new BadRequestException('No assignments provided');
         }
 
-        // Проверка, что stepId действительно относятся к этой техкарте
         const validStepIds = new Set(techCard.steps.map((s) => s.id));
         for (const a of assignments) {
             if (!validStepIds.has(a.stepId)) {
@@ -70,7 +71,6 @@ export class TasksService {
             }
         }
 
-        // Собираем уникальных пользователей для документов
         const userSet = new Set<number>();
         assignments.forEach((a) => {
             (a.leadUserIds || []).forEach((u) => userSet.add(u));
@@ -81,9 +81,7 @@ export class TasksService {
         }
         const userIds = Array.from(userSet);
 
-        // Транзакция
-        return this.prisma.$transaction(async (tx: PrismaClient) => {
-            // 1) Создаём Task
+        const result = await this.prisma.$transaction(async (tx) => {
             const task = await tx.task.create({
                 data: {
                     techCardId,
@@ -93,28 +91,23 @@ export class TasksService {
                 include: { fields: true },
             });
 
-            // 2) Создаём step-assignments и worker-assignments
             for (const a of assignments) {
                 const stepAssignment = await tx.taskStepAssignment.create({
                     data: { taskId: task.id, stepId: a.stepId },
                 });
 
                 const workerCreates: Prisma.TaskWorkerAssignmentCreateManyInput[] = [];
-
                 (a.leadUserIds || []).forEach((userId) =>
-                    workerCreates.push({ stepAssignmentId: stepAssignment.id, userId, role: 'LEAD' as const }),
+                    workerCreates.push({ stepAssignmentId: stepAssignment.id, userId, role: 'LEAD' }),
                 );
                 (a.memberUserIds || []).forEach((userId) =>
-                    workerCreates.push({ stepAssignmentId: stepAssignment.id, userId, role: 'MEMBER' as const }),
+                    workerCreates.push({ stepAssignmentId: stepAssignment.id, userId, role: 'MEMBER' }),
                 );
-
                 if (workerCreates.length) {
                     await tx.taskWorkerAssignment.createMany({ data: workerCreates, skipDuplicates: true });
                 }
             }
 
-            // 3) Собираем контент документов для каждого пользователя
-            // Карта userId -> список шагов с ролью
             const userSteps = new Map<number, Array<{ role: 'LEAD' | 'MEMBER'; stepId: number }>>();
             for (const a of assignments) {
                 (a.leadUserIds || []).forEach((uid) => {
@@ -129,26 +122,22 @@ export class TasksService {
                 });
             }
 
-            // Подтягиваем пользователей
             const users = await tx.user.findMany({
                 where: { id: { in: userIds } },
                 select: { id: true, firstName: true, lastName: true, email: true, role: true },
             });
             const userMap = new Map(users.map((u) => [u.id, u]));
-
-            // Подготовим карту шагов по id для быстрого доступа
             const stepMap = new Map(techCard.steps.map((s) => [s.id, s]));
 
-            // 4) Создаём документы
+            const docsCreated: Array<{ id: number; taskId: number; userId: number }> = [];
+
             for (const uid of userIds) {
                 const stepsForUser = (userSteps.get(uid) || []).sort((a, b) => {
                     const sa = stepMap.get(a.stepId)?.order ?? 0;
                     const sb = stepMap.get(b.stepId)?.order ?? 0;
                     return sa - sb;
                 });
-
-                const user = userMap.get(uid);
-                // Содержимое документа: только необходимые шаги с материалами и полями
+                const u = userMap.get(uid);
                 const docContent = {
                     task: { id: task.id, name: task.name, createdAt: new Date().toISOString() },
                     techCard: {
@@ -156,8 +145,8 @@ export class TasksService {
                         name: techCard.name,
                         item: techCard.item ? { id: techCard.item.id, name: techCard.item.name } : null,
                     },
-                    user: user
-                        ? { id: user.id, firstName: user.firstName, lastName: user.lastName, email: user.email, role: user.role }
+                    user: u
+                        ? { id: u.id, firstName: u.firstName, lastName: u.lastName, email: u.email, role: u.role }
                         : { id: uid },
                     steps: stepsForUser.map(({ role, stepId }) => {
                         const s = stepMap.get(stepId)!;
@@ -179,23 +168,49 @@ export class TasksService {
                     }),
                 };
 
-                await tx.taskDocument.create({
+                const created = await tx.taskDocument.create({
                     data: {
                         taskId: task.id,
                         userId: uid,
                         status: 'NEW',
                         content: docContent as unknown as Prisma.JsonObject,
                     },
+                    select: { id: true, taskId: true, userId: true },
                 });
+                docsCreated.push(created);
             }
 
-            // Вернём Task + краткую сводку по документам
-            const docs = await tx.taskDocument.findMany({
-                where: { taskId: task.id },
-                select: { id: true, userId: true, status: true },
-            });
-
-            return { task, documents: docs };
+            return { task, documents: docsCreated };
         });
+
+        if (preGeneratePdfs) {
+            const docs = await this.prisma.taskDocument.findMany({
+                where: { taskId: result.task.id },
+                include: { user: { select: { id: true, firstName: true, lastName: true, email: true, role: true } } },
+            });
+            await Promise.all(
+                docs.map((d) =>
+                    this.renderer.ensurePdfForDocument({
+                        id: d.id,
+                        taskId: d.taskId,
+                        user: d.user!,
+                        content: d.content,
+                    }),
+                ),
+            );
+        }
+
+        const links = result.documents.map((d) => ({
+            id: d.id,
+            pdfUrl: `/task-documents/${d.id}/pdf`,
+            previewUrl: `/task-documents/${d.id}/preview`,
+        }));
+        const printAllUrl = `/tasks/${result.task.id}/print`;
+
+        return {
+            task: result.task,
+            documents: links,
+            printAllUrl,
+        };
     }
 }
