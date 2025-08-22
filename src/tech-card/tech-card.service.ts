@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 import { CreateTechCardDto } from './dto/create-tech-card.dto';
 import { ReorderStepsDto } from './dto/reorder-steps.dto';
 
@@ -8,7 +9,6 @@ export class TechCardService {
     constructor(private prisma: PrismaService) { }
 
     async create(dto: CreateTechCardDto) {
-        // твоя логика создания как была
         return this.prisma.techCard.create({
             data: {
                 name: dto.name,
@@ -17,7 +17,6 @@ export class TechCardService {
         });
     }
 
-    // ДОБАВЛЕНО: поиск по названию
     async findAll(search?: string) {
         const where = search
             ? { name: { contains: search, mode: 'insensitive' as const } }
@@ -37,7 +36,6 @@ export class TechCardService {
         });
     }
 
-    // ОБНОВЛЕНО: отдаём шаги, операции, станок, материалы и поля шага
     async findOne(id: number) {
         const card = await this.prisma.techCard.findUnique({
             where: { id },
@@ -50,7 +48,7 @@ export class TechCardService {
                         machine: { select: { id: true, name: true } },
                         materials: {
                             include: {
-                                material: { select: { id: true, name: true } },
+                                Item: { select: { id: true, name: true } }, // было material
                                 unit: { select: { id: true, unit: true } },
                             },
                         },
@@ -69,7 +67,7 @@ export class TechCardService {
             name: string;
             operationId?: number;
             machineItemId?: number;
-            materials?: { materialItemId: number; quantity: number; unitId?: number }[];
+            materials?: { materialItemId: number; quantity: number; unitId?: number }[]; // было materialItemId
             fields?: { key: string; value: string }[];
         },
     ) {
@@ -88,7 +86,7 @@ export class TechCardService {
                 materials: body.materials?.length
                     ? {
                         create: body.materials.map((m) => ({
-                            materialItemId: m.materialItemId,
+                            itemId: m.materialItemId, // было materialItemId
                             quantity: m.quantity,
                             unitId: m.unitId ?? null,
                         })),
@@ -99,7 +97,12 @@ export class TechCardService {
             include: {
                 operation: { select: { id: true, name: true } },
                 machine: { select: { id: true, name: true } },
-                materials: true,
+                materials: {
+                    include: {
+                        Item: { select: { id: true, name: true } },
+                        unit: { select: { id: true, unit: true } },
+                    },
+                },
                 fields: true,
             },
         });
@@ -107,7 +110,6 @@ export class TechCardService {
 
     async reorderSteps(dto: ReorderStepsDto) {
         const { techCardId, stepIds } = dto;
-        // простая перестановка с транзакцией
         await this.prisma.$transaction(
             stepIds.map((id, idx) =>
                 this.prisma.techStep.update({

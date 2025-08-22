@@ -1,11 +1,14 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma, TaskStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { DocumentRenderService } from '../document/document.service';
+import { DocumentRenderService } from 'src/document/document.service';
 
 @Injectable()
 export class TasksService {
-    constructor(private prisma: PrismaService, private renderer: DocumentRenderService,) { }
+    constructor(
+        private prisma: PrismaService,
+        private renderer: DocumentRenderService,
+    ) { }
 
     async listTechCards(search?: string) {
         const where = search
@@ -37,7 +40,7 @@ export class TasksService {
                         machine: { select: { id: true, name: true } },
                         materials: {
                             include: {
-                                material: { select: { id: true, name: true } },
+                                Item: { select: { id: true, name: true } }, // было material
                                 unit: { select: { id: true, unit: true } },
                             },
                         },
@@ -159,7 +162,7 @@ export class TasksService {
                             machine: s.machine ? { id: s.machine.id, name: s.machine.name } : null,
                             materials: s.materials.map((m) => ({
                                 id: m.id,
-                                material: { id: m.material.id, name: m.material.name },
+                                material: m.Item ? { id: m.Item.id, name: m.Item.name } : null, // было m.material
                                 quantity: m.quantity,
                                 unit: m.unit ? { id: m.unit.id, unit: m.unit.unit } : null,
                             })),
@@ -186,7 +189,9 @@ export class TasksService {
         if (preGeneratePdfs) {
             const docs = await this.prisma.taskDocument.findMany({
                 where: { taskId: result.task.id },
-                include: { user: { select: { id: true, firstName: true, lastName: true, email: true, role: true } } },
+                include: {
+                    user: { select: { id: true, firstName: true, lastName: true, email: true, role: true } },
+                },
             });
             await Promise.all(
                 docs.map((d) =>

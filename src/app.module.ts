@@ -1,9 +1,5 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from './prisma/prisma.module';
-//import { OperationModule } from './operations/operations.module';
-//import { ProfilesModule } from './profiles/profiles.module';
-//import { PassportModule } from './passport/passport.module';
-//import { TaskModule } from './tasks/tasks.module';
 import { AuthModule } from './auth/auth.module';
 import { CategoryModule } from './category/category.module';
 import { ItemsModule } from './items/items.module';
@@ -13,9 +9,10 @@ import { UnitsModule } from './units/units.module';
 import { TasksModule } from './tasks/tasks.module';
 import { UsersModule } from './users/users.module';
 import { DocumentModule } from './document/document.module';
+import { ReportsModule } from './reports/reports.module';
 
 @Module({
-  imports: [PrismaModule, AuthModule, CategoryModule, ItemsModule, OperationModule, TechCardModule, UnitsModule, TasksModule, UsersModule, DocumentModule],
+  imports: [PrismaModule, AuthModule, CategoryModule, ItemsModule, OperationModule, TechCardModule, UnitsModule, UsersModule, DocumentModule, ReportsModule, TasksModule],
 })
 export class AppModule {}
 

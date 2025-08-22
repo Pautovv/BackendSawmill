@@ -8,12 +8,21 @@ generator client {
 }
 
 model Category {
-  id        Int      @id @default(autoincrement())
-  name      String   @unique
-  path      String   @unique
-  items     Item[]
-  units     Unit[]
+  id       Int        @id @default(autoincrement())
+  name     String
+  slug     String
+  path     String     @unique
+  parentId Int?
+  parent   Category?  @relation("CategoryToCategory", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryToCategory")
+
+  items Item[]
+  units Unit[]
+
   createdAt DateTime @default(now())
+
+  @@unique([parentId, slug])
+  @@index([parentId])
 }
 
 model Item {
@@ -83,14 +92,14 @@ model TechStep {
 }
 
 model TechStepMaterial {
-  id             Int      @id @default(autoincrement())
-  step           TechStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
-  stepId         Int
-  material       Item     @relation(fields: [materialItemId], references: [id], onDelete: Restrict)
-  materialItemId Int
-  quantity       Float
-  unit           Unit?    @relation(fields: [unitId], references: [id], onDelete: SetNull)
-  unitId         Int?
+  id       Int      @id @default(autoincrement())
+  step     TechStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  stepId   Int
+  quantity Float
+  unit     Unit?    @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  unitId   Int?
+  Item     Item?    @relation(fields: [itemId], references: [id])
+  itemId   Int?
 }
 
 model TechStepField {
@@ -141,6 +150,7 @@ model Task {
   fields          TaskField[]
   stepAssignments TaskStepAssignment[]
   documents       TaskDocument[]
+  report          TaskReport?
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
 }
@@ -160,6 +170,7 @@ model TaskStepAssignment {
   step    TechStep               @relation(fields: [stepId], references: [id], onDelete: Cascade)
   stepId  Int
   workers TaskWorkerAssignment[]
+  results TaskStepResult[]
 
   @@unique([taskId, stepId])
 }
@@ -188,3 +199,29 @@ model TaskDocument {
 
   @@unique([taskId, userId])
 }
+
+model TaskReport {
+  id            Int              @id @default(autoincrement())
+  task          Task             @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId        Int              @unique
+  totalQuantity Float?
+  totalUnit     String?
+  notes         String?
+  stepResults   TaskStepResult[]
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+}
+
+model TaskStepResult {
+  id               Int                @id @default(autoincrement())
+  taskReport       TaskReport         @relation(fields: [taskReportId], references: [id], onDelete: Cascade)
+  taskReportId     Int
+  stepAssignment   TaskStepAssignment @relation(fields: [stepAssignmentId], references: [id], onDelete: Cascade)
+  stepAssignmentId Int
+  quantity         Float?
+  unit             String?
+  notes            String?
+
+  @@unique([taskReportId, stepAssignmentId])
+}
+
