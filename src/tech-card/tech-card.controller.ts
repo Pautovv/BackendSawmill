@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, ParseIntPipe, Post, Query } from '@nestjs
 import { TechCardService } from './tech-card.service';
 import { CreateTechCardDto } from './dto/create-tech-card.dto';
 import { ReorderStepsDto } from './dto/reorder-steps.dto';
+import { AddTechStepDto } from './dto/add-step.dto';
 
 @Controller()
 export class TechCardController {
@@ -25,14 +26,7 @@ export class TechCardController {
     @Post('tech-cards/:id/steps')
     addStep(
         @Param('id', ParseIntPipe) id: number,
-        @Body()
-        body: {
-            name: string;
-            operationId?: number;
-            machineItemId?: number;
-            materials?: { materialItemId: number; quantity: number; unitId?: number }[];
-            fields?: { key: string; value: string }[];
-        },
+        @Body() body: AddTechStepDto,
     ) {
         return this.service.addStep(id, body);
     }

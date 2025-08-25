@@ -25,17 +25,49 @@ model Category {
   @@index([parentId])
 }
 
+model Warehouse {
+  id            Int      @id @default(autoincrement())
+  name          String   @unique
+  shelves       Shelf[]
+  items         Item[]
+  responsible   User?    @relation("WarehouseResponsible", fields: [responsibleId], references: [id])
+  responsibleId Int?
+  createdAt     DateTime @default(now())
+
+  @@index([responsibleId])
+}
+
+model Shelf {
+  id          Int       @id @default(autoincrement())
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  warehouseId Int
+  name        String
+  items       Item[]
+  createdAt   DateTime  @default(now())
+
+  @@unique([warehouseId, name])
+  @@index([warehouseId])
+}
+
 model Item {
   id               Int                @id @default(autoincrement())
   category         Category           @relation(fields: [categoryId], references: [id])
   categoryId       Int
   name             String
+  warehouse        Warehouse?         @relation(fields: [warehouseId], references: [id])
+  warehouseId      Int?
+  shelf            Shelf?             @relation(fields: [shelfId], references: [id])
+  shelfId          Int?
   createdAt        DateTime           @default(now())
   fields           ItemField[]
   operations       Operation[]
   techCards        TechCard[]
   TechStep         TechStep[]
   TechStepMaterial TechStepMaterial[]
+
+  @@index([categoryId])
+  @@index([warehouseId])
+  @@index([shelfId])
 }
 
 model ItemField {
@@ -44,6 +76,9 @@ model ItemField {
   itemId Int
   key    String
   value  String
+
+  @@index([itemId])
+  @@index([key])
 }
 
 model Unit {
@@ -62,44 +97,84 @@ model Operation {
   TechStep TechStep[]
 }
 
-model TechCard {
-  id        Int        @id @default(autoincrement())
-  item      Item?      @relation(fields: [itemId], references: [id], onDelete: SetNull)
-  itemId    Int?
+enum NomenclatureType {
+  TECH_CARD_NAME 
+  TECH_STEP_NAME 
+  MACHINE 
+  MATERIAL 
+}
+
+model Nomenclature {
+  id        Int              @id @default(autoincrement())
+  type      NomenclatureType
   name      String
-  steps     TechStep[]
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
-  Task      Task[]
+  isActive  Boolean          @default(true)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  techCards       TechCard[]         @relation("TechCardNameNomenclature")
+  techSteps       TechStep[]         @relation("TechStepNameNomenclature")
+  machineSteps    TechStep[]         @relation("TechStepMachineNomenclature")
+  materialEntries TechStepMaterial[] @relation("TechStepMaterialNomenclature")
+
+  @@unique([type, name])
+  @@index([type])
+  @@index([isActive])
+}
+
+model TechCard {
+  id             Int           @id @default(autoincrement())
+  item           Item?         @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  itemId         Int?
+  name           String // snapshot
+  nomenclatureId Int?
+  nomenclature   Nomenclature? @relation("TechCardNameNomenclature", fields: [nomenclatureId], references: [id])
+  steps          TechStep[]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  Task           Task[]
+
 }
 
 model TechStep {
-  id                 Int                  @id @default(autoincrement())
-  techCard           TechCard             @relation(fields: [techCardId], references: [id], onDelete: Cascade)
-  techCardId         Int
-  order              Int
-  name               String
-  operation          Operation?           @relation(fields: [operationId], references: [id], onDelete: SetNull)
-  operationId        Int?
-  machine            Item?                @relation(fields: [machineItemId], references: [id], onDelete: SetNull)
-  machineItemId      Int?
-  materials          TechStepMaterial[]
-  fields             TechStepField[]
-  createdAt          DateTime             @default(now())
-  TaskStepAssignment TaskStepAssignment[]
+  id                    Int                  @id @default(autoincrement())
+  techCard              TechCard             @relation(fields: [techCardId], references: [id], onDelete: Cascade)
+  techCardId            Int
+  order                 Int
+  name                  String 
+  nomenclatureId        Int? 
+  nomenclature          Nomenclature?        @relation("TechStepNameNomenclature", fields: [nomenclatureId], references: [id])
+  operation             Operation?           @relation(fields: [operationId], references: [id], onDelete: SetNull)
+  operationId           Int?
+  machineItemId         Int? 
+  machine               Item?                @relation(fields: [machineItemId], references: [id], onDelete: SetNull)
+  machineNomenclatureId Int? 
+  machineNomenclature   Nomenclature?        @relation("TechStepMachineNomenclature", fields: [machineNomenclatureId], references: [id])
+  materials             TechStepMaterial[]
+  fields                TechStepField[]
+  createdAt             DateTime             @default(now())
+  TaskStepAssignment    TaskStepAssignment[]
 
   @@unique([techCardId, order])
+  @@index([nomenclatureId])
+  @@index([machineNomenclatureId])
 }
 
+
 model TechStepMaterial {
-  id       Int      @id @default(autoincrement())
-  step     TechStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
-  stepId   Int
-  quantity Float
-  unit     Unit?    @relation(fields: [unitId], references: [id], onDelete: SetNull)
-  unitId   Int?
-  Item     Item?    @relation(fields: [itemId], references: [id])
-  itemId   Int?
+  id             Int           @id @default(autoincrement())
+  step           TechStep      @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  stepId         Int
+  quantity       Float
+  unit           Unit?         @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  unitId         Int?
+  Item           Item?         @relation(fields: [itemId], references: [id]) 
+  itemId         Int?
+  nomenclatureId Int? 
+  nomenclature   Nomenclature? @relation("TechStepMaterialNomenclature", fields: [nomenclatureId], references: [id])
+
+  @@index([nomenclatureId])
+  @@index([itemId])
 }
 
 model TechStepField {
@@ -110,6 +185,13 @@ model TechStepField {
   value  String
 }
 
+enum UserRole {
+  USER
+  ADMIN
+  SELLER
+  WAREHOUSE
+}
+
 model User {
   id                   Int                    @id @default(autoincrement())
   email                String                 @unique
@@ -117,10 +199,12 @@ model User {
   firstName            String
   lastName             String
   avatarUrl            String?
-  role                 String                 @default("user")
+  role                 UserRole               @default(USER)
   createdAt            DateTime               @default(now())
   TaskWorkerAssignment TaskWorkerAssignment[]
   TaskDocument         TaskDocument[]
+
+  responsibleWarehouses Warehouse[] @relation("WarehouseResponsible")
 }
 
 enum TaskStatus {
@@ -224,4 +308,3 @@ model TaskStepResult {
 
   @@unique([taskReportId, stepAssignmentId])
 }
-

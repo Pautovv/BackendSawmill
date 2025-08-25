@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { Prisma, TaskStatus } from '@prisma/client';
+import { Prisma, NomenclatureType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { DocumentRenderService } from 'src/document/document.service';
 
@@ -9,6 +9,7 @@ export class TasksService {
         private prisma: PrismaService,
         private renderer: DocumentRenderService,
     ) { }
+
 
     async listTechCards(search?: string) {
         const where = search
@@ -52,6 +53,7 @@ export class TasksService {
         if (!card) throw new BadRequestException('TechCard not found');
         return card;
     }
+
 
     async createTaskWithDocuments(payload: {
         techCardId: number;
@@ -217,5 +219,37 @@ export class TasksService {
             documents: links,
             printAllUrl,
         };
+    }
+
+    // ... твои существующие методы (listTechCards, getTechCardDetails, createTaskWithDocuments)
+
+    private readonly ASSIGNABLE_ROLES = ['ADMIN', 'WORKER', 'WAREHOUSE', 'MANAGER']; // подправь под свои роли
+
+    async listAssignableUsers(q?: string) {
+        const where: Prisma.UserWhereInput = {
+            role: { in: this.ASSIGNABLE_ROLES as any },
+        };
+
+        if (q?.trim()) {
+            const s = q.trim();
+            (where.OR ||= []).push(
+                { firstName: { contains: s, mode: 'insensitive' } },
+                { lastName: { contains: s, mode: 'insensitive' } },
+                { email: { contains: s, mode: 'insensitive' } },
+            );
+        }
+
+        return this.prisma.user.findMany({
+            where,
+            select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                email: true,
+                role: true,
+                avatarUrl: true,
+            },
+            orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+        });
     }
 }
