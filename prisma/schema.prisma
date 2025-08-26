@@ -65,6 +65,8 @@ model Item {
   TechStep         TechStep[]
   TechStepMaterial TechStepMaterial[]
 
+  quantity Float @default(0) // ДОБАВЛЕНО: остаток на складе (логически — в штуках / базовой единице)
+
   @@index([categoryId])
   @@index([warehouseId])
   @@index([shelfId])
@@ -98,10 +100,10 @@ model Operation {
 }
 
 enum NomenclatureType {
-  TECH_CARD_NAME 
-  TECH_STEP_NAME 
-  MACHINE 
-  MATERIAL 
+  TECH_CARD_NAME
+  TECH_STEP_NAME
+  MACHINE
+  MATERIAL
 }
 
 model Nomenclature {
@@ -133,7 +135,6 @@ model TechCard {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
   Task           Task[]
-
 }
 
 model TechStep {
@@ -141,14 +142,14 @@ model TechStep {
   techCard              TechCard             @relation(fields: [techCardId], references: [id], onDelete: Cascade)
   techCardId            Int
   order                 Int
-  name                  String 
-  nomenclatureId        Int? 
+  name                  String
+  nomenclatureId        Int?
   nomenclature          Nomenclature?        @relation("TechStepNameNomenclature", fields: [nomenclatureId], references: [id])
   operation             Operation?           @relation(fields: [operationId], references: [id], onDelete: SetNull)
   operationId           Int?
-  machineItemId         Int? 
+  machineItemId         Int?
   machine               Item?                @relation(fields: [machineItemId], references: [id], onDelete: SetNull)
-  machineNomenclatureId Int? 
+  machineNomenclatureId Int?
   machineNomenclature   Nomenclature?        @relation("TechStepMachineNomenclature", fields: [machineNomenclatureId], references: [id])
   materials             TechStepMaterial[]
   fields                TechStepField[]
@@ -160,17 +161,15 @@ model TechStep {
   @@index([machineNomenclatureId])
 }
 
-
 model TechStepMaterial {
   id             Int           @id @default(autoincrement())
   step           TechStep      @relation(fields: [stepId], references: [id], onDelete: Cascade)
   stepId         Int
-  quantity       Float
   unit           Unit?         @relation(fields: [unitId], references: [id], onDelete: SetNull)
   unitId         Int?
-  Item           Item?         @relation(fields: [itemId], references: [id]) 
+  Item           Item?         @relation(fields: [itemId], references: [id])
   itemId         Int?
-  nomenclatureId Int? 
+  nomenclatureId Int? // оставлено для совместимости, но больше не используем в новых шагах
   nomenclature   Nomenclature? @relation("TechStepMaterialNomenclature", fields: [nomenclatureId], references: [id])
 
   @@index([nomenclatureId])
@@ -248,13 +247,14 @@ model TaskField {
 }
 
 model TaskStepAssignment {
-  id      Int                    @id @default(autoincrement())
-  task    Task                   @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  taskId  Int
-  step    TechStep               @relation(fields: [stepId], references: [id], onDelete: Cascade)
-  stepId  Int
-  workers TaskWorkerAssignment[]
-  results TaskStepResult[]
+  id              Int                    @id @default(autoincrement())
+  task            Task                   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId          Int
+  step            TechStep               @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  stepId          Int
+  workers         TaskWorkerAssignment[]
+  results         TaskStepResult[]
+  plannedQuantity Float? // ДОБАВЛЕНО: количество изделий / повторов для этого шага (по которому умножаем материалы)
 
   @@unique([taskId, stepId])
 }

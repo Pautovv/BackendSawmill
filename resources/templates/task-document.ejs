@@ -5,22 +5,25 @@
   <title>Задание <%= task?.name %> — <%= user?.lastName %> <%= user?.firstName %></title>
   <style>
     @page { size: A4; margin: 15mm 12mm; }
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, "Noto Sans", "Liberation Sans", "Helvetica Neue", sans-serif; color:#111; }
-    h1,h2,h3 { margin: 0 0 8px; }
-    .muted { color:#666; font-size: 12px; }
-    .row { display: flex; gap: 16px; align-items: flex-start; }
+    body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; color:#111; }
+    h1,h2,h3 { margin:0 0 8px; }
+    .muted { color:#666; font-size:12px; }
+    .row { display:flex; gap:16px; align-items:flex-start; }
     .card { border:1px solid #ddd; border-radius:12px; padding:12px 14px; margin:10px 0; }
     .chip { display:inline-block; border-radius:999px; border:1px solid #e5e5e5; padding:2px 8px; font-size:12px; background:#fafafa; }
-    table { width: 100%; border-collapse: collapse; margin-top: 6px; }
-    th, td { border:1px solid #ddd; padding:6px 8px; font-size: 13px; vertical-align: top; }
+    table { width:100%; border-collapse:collapse; margin-top:6px; }
+    th,td { border:1px solid #ddd; padding:6px 8px; font-size:13px; vertical-align:top; }
     th { background:#f7f7f7; text-align:left; }
-    .page-break { page-break-after: always; }
   </style>
 </head>
 <body>
   <div>
     <h2>Задание: <%= task?.name %></h2>
-    <div class="muted">Документ #<%= documentId %> • Пользователь: <%= user?.lastName %> <%= user?.firstName %> (<%= user?.role %>) • Сформировано: <%= now %></div>
+    <div class="muted">
+      Документ #<%= documentId %> • Пользователь:
+      <%= user?.lastName %> <%= user?.firstName %> (<%= user?.role %>)
+      • Сформировано: <%= now %>
+    </div>
     <% if (techCard?.item) { %>
       <div class="muted">Изделие: <%= techCard.item.name %></div>
     <% } %>
@@ -28,15 +31,16 @@
 
   <div style="margin-top:12px">
     <% if (steps && steps.length) { %>
-      <% steps.forEach(function(s) { %>
+      <% steps.forEach(function(s){ %>
         <div class="card">
-          <div class="row" style="justify-content: space-between;">
+          <div class="row" style="justify-content:space-between;">
             <div>
               <div><strong>Шаг <%= s.order %>. <%= s.name %></strong></div>
               <div class="muted">
-                <% if (s.operation) { %><span class="chip">Операция: <%= s.operation.name %></span> <% } %>
-                <% if (s.machine) { %><span class="chip">Станок: <%= s.machine.name %></span> <% } %>
+                <% if (s.operation) { %><span class="chip">Операция: <%= s.operation.name %></span><% } %>
+                <% if (s.machine) { %><span class="chip">Станок: <%= s.machine.name %></span><% } %>
                 <span class="chip">Роль: <%= s.role === 'LEAD' ? 'Главный' : 'Участник' %></span>
+                <span class="chip">Кол-во повторов: <%= s.plannedQuantity %></span>
               </div>
             </div>
           </div>
@@ -61,8 +65,8 @@
                 <tbody>
                   <% s.materials.forEach(function(m){ %>
                     <tr>
-                      <td><%= m.material.name %></td>
-                      <td><%= m.quantity %> <%= m.unit?.unit || '' %></td>
+                      <td><%= (m.material && m.material.name) || m.name || 'Материал' %></td>
+                      <td><%= m.quantity || 1 %> <%= m.unit?.unit || '' %></td>
                     </tr>
                   <% }) %>
                 </tbody>

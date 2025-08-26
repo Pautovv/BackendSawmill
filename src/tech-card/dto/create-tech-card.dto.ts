@@ -1,18 +1,17 @@
+import { IsArray, IsInt, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+import { AddTechStepDto } from './add-step.dto';
+
 export class CreateTechCardDto {
+    @IsString()
     name: string;
+
+    @IsOptional()
+    @IsInt()
     itemId?: number;
-    steps?: {
-        name: string;
-        machineNomenclatureId?: number;
-        machineItemId?: number;
-        operationId?: number;
-        materials?: {
-            nomenclatureId?: number;   // MATERIAL
-            materialItemId?: number;   // старый путь (если нужен)
-            // quantity убран с фронта – если не передан, сервис подставит 1
-            quantity?: number;
-            unitId?: number;
-        }[];
-        fields?: { key: string; value: string }[];
-    }[];
+
+    @IsArray()
+    @ValidateNested({ each: true })
+    @Type(() => AddTechStepDto)
+    steps: AddTechStepDto[];
 }

@@ -20,14 +20,54 @@ export class TechCardService {
         return n;
     }
 
+    private buildMaterials(materials: AddTechStepDto['materials']) {
+        return (materials || []).map((m) => {
+            if (!m.itemId && !m.nomenclatureId) {
+                throw new BadRequestException(
+                    'Material itemId или nomenclatureId обязателен',
+                );
+            }
+            const data: any = {};
+            if (m.itemId) data.Item = { connect: { id: m.itemId } };
+            if (m.nomenclatureId)
+                data.nomenclature = { connect: { id: m.nomenclatureId } };
+            if (m.unitId)
+                data.unit = { connect: { id: m.unitId } }; // если unit не нужен — убрать
+            return data;
+        });
+    }
+
+    private normalizeStepMaterials(steps: any[]) {
+        for (const step of steps) {
+            for (const mat of step.materials as any[]) {
+                // displayName
+                let name: string;
+                if (mat.Item) {
+                    const breedField = mat.Item.fields?.find((f: any) =>
+                        ['порода', 'breed'].includes(f.key.toLowerCase()),
+                    );
+                    name = breedField
+                        ? `${mat.Item.name} ${breedField.value}`.trim()
+                        : mat.Item.name;
+                } else if (mat.nomenclature) {
+                    name = mat.nomenclature.name;
+                } else {
+                    name = 'Материал';
+                }
+
+                // virtual поля для шаблонов и фронта
+                if (!mat.displayName) mat.displayName = name;
+                if (!mat.material) mat.material = { name };
+                if (mat.quantity == null) mat.quantity = 1; // всегда 1
+            }
+        }
+    }
+
     async create(dto: CreateTechCardDto) {
         if (!dto.name?.trim()) throw new BadRequestException('Name is required');
-        if (!dto.steps || dto.steps.length === 0) {
+        if (!dto.steps?.length)
             throw new BadRequestException('At least one step required');
-        }
-        const steps = dto.steps;
 
-        // 1) Выполняем транзакцию и возвращаем только ID созданной карты
         const createdId = await this.prisma.$transaction(async (tx) => {
             const card = await tx.techCard.create({
                 data: {
@@ -37,11 +77,10 @@ export class TechCardService {
                 select: { id: true },
             });
 
-            let orderCounter = 1;
-            for (const s of steps) {
-                if (!s.name?.trim()) {
-                    throw new BadRequestException(`Step #${orderCounter} name required`);
-                }
+            let order = 1;
+            for (const s of dto.steps) {
+                if (!s.name?.trim())
+                    throw new BadRequestException(`Step #${order} name required`);
 
                 if (s.machineNomenclatureId) {
                     await this.assertNomenclature(
@@ -50,29 +89,12 @@ export class TechCardService {
                     );
                 }
 
-                const materialsCreate = s.materials?.length
-                    ? s.materials.map((m) => {
-                        if (!m.nomenclatureId && !m.materialItemId) {
-                            throw new BadRequestException(
-                                'Material nomenclatureId or materialItemId required',
-                            );
-                        }
-                        return {
-                            nomenclatureId: m.nomenclatureId ?? null,
-                            itemId: m.materialItemId ?? null,
-                            quantity:
-                                m.quantity != null
-                                    ? m.quantity
-                                    : 1, // если quantity не приходит (мы его убрали на фронте)
-                            unitId: m.unitId ?? null,
-                        };
-                    })
-                    : [];
+                const materialsCreate = this.buildMaterials(s.materials);
 
                 for (const mc of materialsCreate) {
-                    if (mc.nomenclatureId) {
+                    if (mc.nomenclature?.connect?.id) {
                         await this.assertNomenclature(
-                            mc.nomenclatureId,
+                            mc.nomenclature.connect.id,
                             NomenclatureType.MATERIAL,
                         );
                     }
@@ -81,7 +103,7 @@ export class TechCardService {
                 await tx.techStep.create({
                     data: {
                         techCardId: card.id,
-                        order: orderCounter++,
+                        order: order++,
                         name: s.name.trim(),
                         machineItemId: s.machineItemId ?? null,
                         machineNomenclatureId: s.machineNomenclatureId ?? null,
@@ -97,7 +119,6 @@ export class TechCardService {
             return card.id;
         });
 
-        // 2) Теперь транзакция закоммичена — можно безопасно подтянуть полную сущность
         return this.findOne(createdId);
     }
 
@@ -105,7 +126,6 @@ export class TechCardService {
         const where = search
             ? { name: { contains: search, mode: 'insensitive' as const } }
             : undefined;
-
         return this.prisma.techCard.findMany({
             where,
             select: {
@@ -133,8 +153,15 @@ export class TechCardService {
                         operation: { select: { id: true, name: true } },
                         materials: {
                             include: {
+                                Item: {
+                                    select: {
+                                        id: true,
+                                        name: true,
+                                        quantity: true,
+                                        fields: true,
+                                    },
+                                },
                                 nomenclature: true,
-                                Item: { select: { id: true, name: true } },
                                 unit: { select: { id: true, unit: true } },
                             },
                         },
@@ -144,6 +171,8 @@ export class TechCardService {
             },
         });
         if (!card) throw new BadRequestException('TechCard not found');
+
+        this.normalizeStepMaterials(card.steps);
         return card;
     }
 
@@ -162,32 +191,17 @@ export class TechCardService {
             );
         }
 
-        const materialsCreate = body.materials?.length
-            ? body.materials.map((m) => {
-                if (!m.nomenclatureId && !m.materialItemId) {
-                    throw new BadRequestException(
-                        'Material nomenclatureId or materialItemId required',
-                    );
-                }
-                return {
-                    nomenclatureId: m.nomenclatureId ?? null,
-                    itemId: m.materialItemId ?? null,
-                    quantity: m.quantity != null ? m.quantity : 1,
-                    unitId: m.unitId ?? null,
-                };
-            })
-            : [];
-
+        const materialsCreate = this.buildMaterials(body.materials);
         for (const mc of materialsCreate) {
-            if (mc.nomenclatureId) {
+            if (mc.nomenclature?.connect?.id) {
                 await this.assertNomenclature(
-                    mc.nomenclatureId,
+                    mc.nomenclature.connect.id,
                     NomenclatureType.MATERIAL,
                 );
             }
         }
 
-        return this.prisma.techStep.create({
+        const step = await this.prisma.techStep.create({
             data: {
                 techCardId,
                 order: (maxOrder._max.order ?? 0) + 1,
@@ -206,14 +220,17 @@ export class TechCardService {
                 operation: { select: { id: true, name: true } },
                 materials: {
                     include: {
+                        Item: { select: { id: true, name: true, quantity: true, fields: true } },
                         nomenclature: true,
-                        Item: { select: { id: true, name: true } },
                         unit: { select: { id: true, unit: true } },
                     },
                 },
                 fields: true,
             },
         });
+
+        this.normalizeStepMaterials([step]);
+        return step;
     }
 
     async reorderSteps(dto: ReorderStepsDto) {

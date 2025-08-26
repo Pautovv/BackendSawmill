@@ -23,7 +23,8 @@ export class UsersController {
     constructor(private prisma: PrismaService) { }
 
     private getActorId(req: any): number {
-        const id = req?.user?.userId;
+        const u = req?.user || {};
+        const id = u.userId || u.id || u.sub;
         if (!id) throw new UnauthorizedException('Не авторизован');
         return id;
     }

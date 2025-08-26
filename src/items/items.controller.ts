@@ -45,12 +45,15 @@ export class ItemController {
       fields: { key: string; value: string }[];
       warehouseId: number;
       shelfId: number;
+      quantity: number; // теперь ОБЯЗАТЕЛЬНО
     },
   ) {
+    if (body.quantity == null) {
+      throw new BadRequestException('quantity required');
+    }
     return this.itemService.create(body);
   }
 
-  // Новый универсальный PATCH (фронт в твоём коде дергает именно /items/:id)
   @Patch(':id')
   updateLocation(
     @Param('id', ParseIntPipe) id: number,
@@ -62,13 +65,21 @@ export class ItemController {
     return this.itemService.move(id, body.warehouseId, body.shelfId);
   }
 
-  // Оставляем старый эндпоинт для совместимости (можно удалить позже)
   @Patch(':id/move')
   move(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: { warehouseId: number; shelfId: number },
   ) {
     return this.itemService.move(id, body.warehouseId, body.shelfId);
+  }
+
+  @Patch(':id/quantity')
+  updateQuantity(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { quantity: number },
+  ) {
+    if (body.quantity == null) throw new BadRequestException('quantity required');
+    return this.itemService.setQuantity(id, body.quantity);
   }
 
   @Delete(':id')
@@ -85,9 +96,7 @@ export class ItemController {
   }
 
   @Delete(':itemId/fields/:fieldId')
-  deleteField(
-    @Param('fieldId', ParseIntPipe) fieldId: number,
-  ) {
+  deleteField(@Param('fieldId', ParseIntPipe) fieldId: number) {
     return this.itemService.deleteField(fieldId);
   }
 }
