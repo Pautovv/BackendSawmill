@@ -21,54 +21,23 @@ export class TechCardService {
     }
 
     private buildMaterials(materials: AddTechStepDto['materials']) {
-        return (materials || []).map((m) => {
+        return (materials || []).map(m => {
             if (!m.itemId && !m.nomenclatureId) {
-                throw new BadRequestException(
-                    'Material itemId или nomenclatureId обязателен',
-                );
+                throw new BadRequestException('Material itemId или nomenclatureId обязателен');
             }
             const data: any = {};
             if (m.itemId) data.Item = { connect: { id: m.itemId } };
-            if (m.nomenclatureId)
-                data.nomenclature = { connect: { id: m.nomenclatureId } };
-            if (m.unitId)
-                data.unit = { connect: { id: m.unitId } }; // если unit не нужен — убрать
+            if (m.nomenclatureId) data.nomenclature = { connect: { id: m.nomenclatureId } };
+            if (m.unitId) data.unit = { connect: { id: m.unitId } };
             return data;
         });
     }
 
-    private normalizeStepMaterials(steps: any[]) {
-        for (const step of steps) {
-            for (const mat of step.materials as any[]) {
-                // displayName
-                let name: string;
-                if (mat.Item) {
-                    const breedField = mat.Item.fields?.find((f: any) =>
-                        ['порода', 'breed'].includes(f.key.toLowerCase()),
-                    );
-                    name = breedField
-                        ? `${mat.Item.name} ${breedField.value}`.trim()
-                        : mat.Item.name;
-                } else if (mat.nomenclature) {
-                    name = mat.nomenclature.name;
-                } else {
-                    name = 'Материал';
-                }
-
-                // virtual поля для шаблонов и фронта
-                if (!mat.displayName) mat.displayName = name;
-                if (!mat.material) mat.material = { name };
-                if (mat.quantity == null) mat.quantity = 1; // всегда 1
-            }
-        }
-    }
-
     async create(dto: CreateTechCardDto) {
         if (!dto.name?.trim()) throw new BadRequestException('Name is required');
-        if (!dto.steps?.length)
-            throw new BadRequestException('At least one step required');
+        if (!dto.steps?.length) throw new BadRequestException('At least one step required');
 
-        const createdId = await this.prisma.$transaction(async (tx) => {
+        const createdId = await this.prisma.$transaction(async tx => {
             const card = await tx.techCard.create({
                 data: {
                     name: dto.name.trim(),
@@ -83,20 +52,14 @@ export class TechCardService {
                     throw new BadRequestException(`Step #${order} name required`);
 
                 if (s.machineNomenclatureId) {
-                    await this.assertNomenclature(
-                        s.machineNomenclatureId,
-                        NomenclatureType.MACHINE,
-                    );
+                    await this.assertNomenclature(s.machineNomenclatureId, NomenclatureType.MACHINE);
                 }
 
-                const materialsCreate = this.buildMaterials(s.materials);
+                const materialsCreate = this.buildMaterials(s.materials || []);
 
                 for (const mc of materialsCreate) {
                     if (mc.nomenclature?.connect?.id) {
-                        await this.assertNomenclature(
-                            mc.nomenclature.connect.id,
-                            NomenclatureType.MATERIAL,
-                        );
+                        await this.assertNomenclature(mc.nomenclature.connect.id, NomenclatureType.MATERIAL);
                     }
                 }
 
@@ -108,9 +71,7 @@ export class TechCardService {
                         machineItemId: s.machineItemId ?? null,
                         machineNomenclatureId: s.machineNomenclatureId ?? null,
                         operationId: s.operationId ?? null,
-                        materials: materialsCreate.length
-                            ? { create: materialsCreate }
-                            : undefined,
+                        materials: materialsCreate.length ? { create: materialsCreate } : undefined,
                         fields: s.fields?.length ? { create: s.fields } : undefined,
                     },
                 });
@@ -171,8 +132,6 @@ export class TechCardService {
             },
         });
         if (!card) throw new BadRequestException('TechCard not found');
-
-        this.normalizeStepMaterials(card.steps);
         return card;
     }
 
@@ -185,23 +144,17 @@ export class TechCardService {
         });
 
         if (body.machineNomenclatureId) {
-            await this.assertNomenclature(
-                body.machineNomenclatureId,
-                NomenclatureType.MACHINE,
-            );
+            await this.assertNomenclature(body.machineNomenclatureId, NomenclatureType.MACHINE);
         }
 
-        const materialsCreate = this.buildMaterials(body.materials);
+        const materialsCreate = this.buildMaterials(body.materials || []);
         for (const mc of materialsCreate) {
             if (mc.nomenclature?.connect?.id) {
-                await this.assertNomenclature(
-                    mc.nomenclature.connect.id,
-                    NomenclatureType.MATERIAL,
-                );
+                await this.assertNomenclature(mc.nomenclature.connect.id, NomenclatureType.MATERIAL);
             }
         }
 
-        const step = await this.prisma.techStep.create({
+        return this.prisma.techStep.create({
             data: {
                 techCardId,
                 order: (maxOrder._max.order ?? 0) + 1,
@@ -209,9 +162,7 @@ export class TechCardService {
                 machineItemId: body.machineItemId ?? null,
                 machineNomenclatureId: body.machineNomenclatureId ?? null,
                 operationId: body.operationId ?? null,
-                materials: materialsCreate.length
-                    ? { create: materialsCreate }
-                    : undefined,
+                materials: materialsCreate.length ? { create: materialsCreate } : undefined,
                 fields: body.fields?.length ? { create: body.fields } : undefined,
             },
             include: {
@@ -228,9 +179,6 @@ export class TechCardService {
                 fields: true,
             },
         });
-
-        this.normalizeStepMaterials([step]);
-        return step;
     }
 
     async reorderSteps(dto: ReorderStepsDto) {

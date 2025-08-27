@@ -1,5 +1,6 @@
 import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from 'src/prisma/prisma.service';
 
@@ -24,6 +25,16 @@ export class AuthService {
         lastName: dto.lastName,
       },
     });
+    if(user.id == 1) {
+        await this.prisma.user.update({
+            where: {
+                id: 1
+            },
+            data: {
+                role: UserRole.ADMIN
+            }
+        })
+    }
 
     return this.generateTokens(user.id, user.email);
   }
@@ -52,7 +63,7 @@ export class AuthService {
   private generateTokens(userId: number, email: string) {
     const payload = { sub: userId, email };
 
-    const accessToken = this.jwtService.sign(payload, { expiresIn: '15m' });
+    const accessToken = this.jwtService.sign(payload, { expiresIn: '14d' });
     const refreshToken = this.jwtService.sign(payload, { expiresIn: '7d' });
 
     return { accessToken, refreshToken };

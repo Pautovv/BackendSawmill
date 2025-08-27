@@ -16,6 +16,7 @@ import { Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
+import { type Request as request } from 'express';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard)
@@ -30,14 +31,7 @@ export class UsersController {
     }
 
     @Get()
-    async list(@Req() req, @Query('search') search?: string) {
-        const actorId = this.getActorId(req);
-        const me = await this.prisma.user.findUnique({
-            where: { id: actorId },
-            select: { role: true },
-        });
-        if (me?.role !== 'ADMIN')
-            throw new ForbiddenException('Только для администраторов');
+    async list(@Req() req: request, @Query('search') search?: string) {
 
         let where: Prisma.UserWhereInput | undefined;
         if (search) {

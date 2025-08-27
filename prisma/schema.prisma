@@ -278,10 +278,12 @@ model TaskDocument {
   userId    Int
   status    DocumentStatus @default(NEW)
   content   Json
+  printable Boolean        @default(true) // <--- ДОБАВЛЕНО
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt
 
   @@unique([taskId, userId])
+  @@index([printable]) // <--- РЕКОМЕНДОВАННЫЙ ИНДЕКС
 }
 
 model TaskReport {

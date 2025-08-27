@@ -6,6 +6,20 @@ import * as path from 'path';
 import { mkdirp } from 'mkdirp';
 import dayjs from 'dayjs';
 
+interface DocInput {
+    id: number;
+    taskId: number;
+    user: {
+        id: number;
+        firstName: string | null;
+        lastName: string | null;
+        email: string | null;
+        role: string | null;
+    };
+    content: Prisma.JsonValue;
+    printable?: boolean;
+}
+
 @Injectable()
 export class DocumentRenderService {
     private readonly envTemplatesDir = process.env.DOC_TEMPLATES_DIR;
@@ -26,27 +40,18 @@ export class DocumentRenderService {
     private templatesDir = this.resolveTemplatesDir();
     private outDir = this.resolveOutDir();
 
-    // Ленивая загрузка puppeteer (если будете делать PDF)
-    private async getPuppeteer() {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const puppeteer = require('puppeteer') as typeof import('puppeteer');
-        return puppeteer;
+    private async loadTemplate(name: string) {
+        const full = path.join(this.templatesDir, name);
+        return fs.promises.readFile(full, 'utf8');
     }
 
     getDocPdfPath(taskId: number, docId: number) {
         return path.join(this.outDir, `task-${taskId}`, `doc-${docId}.pdf`);
     }
 
-    async renderSingleHtml(doc: {
-        id: number;
-        taskId: number;
-        user: { id: number; firstName: string; lastName: string; email: string; role: string | null };
-        content: Prisma.JsonValue;
-    }) {
-        const templatePath = path.join(this.templatesDir, 'task-document.ejs');
-        const template = await fs.promises.readFile(templatePath, 'utf8');
+    async renderSingleHtml(doc: DocInput) {
+        const template = await this.loadTemplate('task-document.ejs');
         const data = doc.content as any;
-
         return ejs.render(template, {
             now: dayjs().format('YYYY-MM-DD HH:mm'),
             documentId: doc.id,
@@ -62,13 +67,18 @@ export class DocumentRenderService {
         name: string;
         documents: Array<{
             id: number;
-            user: { id: number; firstName: string; lastName: string; email: string; role: string | null };
+            user: {
+                id: number;
+                firstName: string | null;
+                lastName: string | null;
+                email: string | null;
+                role: string | null;
+            };
             content: Prisma.JsonValue;
+            printable?: boolean;
         }>;
     }) {
-        const templatePath = path.join(this.templatesDir, 'print-all.ejs');
-        const template = await fs.promises.readFile(templatePath, 'utf8');
-
+        const wrapper = await this.loadTemplate('print-all.ejs');
         const sections: string[] = [];
         for (const d of task.documents) {
             const single = await this.renderSingleHtml({
@@ -76,11 +86,11 @@ export class DocumentRenderService {
                 taskId: task.id,
                 user: d.user,
                 content: d.content,
+                printable: d.printable,
             });
             sections.push(single);
         }
-
-        return ejs.render(template, {
+        return ejs.render(wrapper, {
             now: dayjs().format('YYYY-MM-DD HH:mm'),
             taskId: task.id,
             taskName: task.name,
@@ -88,15 +98,12 @@ export class DocumentRenderService {
         });
     }
 
-    async ensurePdfForDocument(doc: {
-        id: number;
-        taskId: number;
-        user: { id: number; firstName: string; lastName: string; email: string; role: string | null };
-        content: Prisma.JsonValue;
-    }) {
+    async ensurePdfForDocument(doc: DocInput) {
+        if (doc.printable === false) {
+            throw new InternalServerErrorException('Document is not printable');
+        }
         const pdfPath = this.getDocPdfPath(doc.taskId, doc.id);
         await mkdirp(path.dirname(pdfPath));
-
         try {
             await fs.promises.access(pdfPath, fs.constants.F_OK);
             return pdfPath;
@@ -105,7 +112,8 @@ export class DocumentRenderService {
         const html = await this.renderSingleHtml(doc);
 
         try {
-            const puppeteer = await this.getPuppeteer();
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const puppeteer = require('puppeteer') as typeof import('puppeteer');
             const browser = await puppeteer.launch({
                 headless: true,
                 args: ['--no-sandbox', '--disable-setuid-sandbox'],
@@ -121,7 +129,7 @@ export class DocumentRenderService {
             });
             await browser.close();
             return pdfPath;
-        } catch (e) {
+        } catch {
             throw new InternalServerErrorException('Failed to generate PDF');
         }
     }

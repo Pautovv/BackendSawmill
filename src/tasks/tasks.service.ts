@@ -4,24 +4,96 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, UserRole, WorkerRole } from '@prisma/client';
+import { Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { DocumentRenderService } from '../document/document.service';
+
+/**
+ * Inventory step semantic
+ */
+type InventoryMode = 'ISSUE' | 'RECEIVE' | 'NONE';
 
 interface NormalizedMaterial {
   id: number;
   material: { name: string };
   quantity: number;
   unit: { id: number; unit: string } | null;
-  item: { id: number; available: number | null } | null;
+  item: { id: number; available: number | null; size?: string | null } | null;
+  baseSize?: string | null;
+  perUnitMetrics?: { lm: number | null; m2: number | null; m3: number | null } | null;
+  totalMetrics?: { lm: number | null; m2: number | null; m3: number | null } | null;
 }
+
+/* ====== Size / Metrics Utils ====== */
+const SIZE_SEP_RE = /x|×|\*|х/gi;
+function num(val: any) {
+  if (val == null) return NaN;
+  return Number(String(val).replace(',', '.'));
+}
+function tokenToMeters(raw: string) {
+  const s = String(raw).trim().toLowerCase();
+  const n = num(s.replace(/[^\d.,-]/g, ''));
+  if (!isFinite(n)) return NaN;
+  if (s.includes('мм') || s.includes('mm')) return n / 1000;
+  if (s.includes('см') || s.includes('cm')) return n / 100;
+  if (/(^|\d)(м|m)$/.test(s)) return n;
+  return n / 1000;
+}
+function parseSize(sizeStr: string) {
+  if (!sizeStr) return null;
+  const parts = sizeStr
+    .split(SIZE_SEP_RE)
+    .map(p => p.trim())
+    .filter(Boolean);
+  if (parts.length === 2) {
+    const d = tokenToMeters(parts[0]);
+    const l = tokenToMeters(parts[1]);
+    if (d > 0 && l > 0 && isFinite(d) && isFinite(l)) return { kind: 'LOG' as const, d, l };
+    return null;
+  }
+  if (parts.length === 3) {
+    const h = tokenToMeters(parts[0]);
+    const w = tokenToMeters(parts[1]);
+    const l = tokenToMeters(parts[2]);
+    if (h > 0 && w > 0 && l > 0 && isFinite(h) && isFinite(w) && isFinite(l))
+      return { kind: 'LUMBER' as const, h, w, l };
+    return null;
+  }
+  return null;
+}
+function round3(n: number | null | undefined) {
+  if (n == null || !isFinite(n)) return null;
+  return Number(n.toFixed(3));
+}
+function metricsFromSize(size: string | null) {
+  if (!size) return null;
+  const parsed = parseSize(size);
+  if (!parsed) return null;
+  if (parsed.kind === 'LOG') {
+    const { d, l } = parsed;
+    const m3 = Math.PI * Math.pow(d / 2, 2) * l;
+    const lm = l;
+    const m2 = Math.PI * d * l;
+    return { lm: round3(lm), m2: round3(m2), m3: round3(m3) };
+  }
+  if (parsed.kind === 'LUMBER') {
+    const { h, w, l } = parsed;
+    const m3 = h * w * l;
+    const lm = l;
+    const m2 = w * l;
+    return { lm: round3(lm), m2: round3(m2), m3: round3(m3) };
+  }
+  return null;
+}
+
+const PRINT_SKIP_ROLES: UserRole[] = ['WAREHOUSE', 'SELLER'];
 
 @Injectable()
 export class TasksService {
   constructor(
     private prisma: PrismaService,
     private renderer: DocumentRenderService,
-  ) {}
+  ) { }
 
   private readonly ASSIGNABLE_ROLES: UserRole[] = [
     'ADMIN',
@@ -30,44 +102,79 @@ export class TasksService {
     'SELLER',
   ];
 
-  /* ---------- Материалы ---------- */
-  private enrichMaterial(raw: any): NormalizedMaterial {
-    let baseName: string;
+  /* ========= Classification ========= */
+  private classifyInventoryStep(step: { name: string; operation?: { name?: string } | null }): InventoryMode {
+    const text = [step?.name || '', step?.operation?.name || '']
+      .map(s => s.toLowerCase())
+      .join(' ');
+    const issueWords = ['со склада', 'выдать', 'отгруз', 'списать', 'выдача', 'продать', 'продажа', 'реализовать'];
+    const receiveWords = ['на склад', 'принять', 'прием', 'приём', 'получить', 'возврат', 'поступление', 'вернуть', 'принять возврат'];
+    const isReceive = receiveWords.some(w => text.includes(w));
+    const isIssue = issueWords.some(w => text.includes(w));
+    if (isReceive) return 'RECEIVE';
+    if (isIssue) return 'ISSUE';
+    return 'NONE';
+  }
+  private canInventoryActor(role?: UserRole | null) {
+    return role === 'WAREHOUSE' || role === 'SELLER';
+  }
+
+  /* ========= Material normalization + metrics ========= */
+  private enrichMaterial(raw: any, plannedQuantity = 1): NormalizedMaterial {
+    let displayBase: string;
+    let sizeField: string | null = null;
+
     if (raw.Item) {
-      const breedField = raw.Item.fields?.find((f: any) =>
+      const fields = raw.Item.fields || [];
+      const breedField = fields.find((f: any) =>
         ['порода', 'breed'].includes(f.key.toLowerCase()),
       );
-      baseName = breedField
-        ? `${raw.Item.name} ${breedField.value}`.trim()
-        : raw.Item.name;
+      const sizeF = fields.find((f: any) =>
+        ['размер', 'size'].includes(f.key.toLowerCase()),
+      );
+      if (sizeF?.value) sizeField = sizeF.value;
+      displayBase = raw.Item.name;
+      if (breedField?.value) displayBase += ' ' + breedField.value;
+      if (sizeField) displayBase += ' ' + sizeField;
+      displayBase = displayBase.trim();
     } else if (raw.nomenclature) {
-      baseName = raw.nomenclature.name;
+      displayBase = raw.nomenclature.name;
     } else {
-      baseName = 'Материал';
+      displayBase = 'Материал';
     }
+
+    const baseSize = sizeField || null;
+    const perUnitMetrics = metricsFromSize(baseSize);
+    const perCount = raw.quantity != null ? raw.quantity : 1;
+    const totalCount = perCount * plannedQuantity;
+    let totalMetrics: NormalizedMaterial['totalMetrics'] = null;
+    if (perUnitMetrics) {
+      totalMetrics = {
+        lm: perUnitMetrics.lm != null ? round3(perUnitMetrics.lm * totalCount) : null,
+        m2: perUnitMetrics.m2 != null ? round3(perUnitMetrics.m2 * totalCount) : null,
+        m3: perUnitMetrics.m3 != null ? round3(perUnitMetrics.m3 * totalCount) : null,
+      };
+    }
+
     return {
       id: raw.id,
-      material: { name: baseName },
-      quantity: 1,
+      material: { name: displayBase },
+      quantity: perCount,
       unit: raw.unit ? { id: raw.unit.id, unit: raw.unit.unit } : null,
       item: raw.Item
-        ? { id: raw.Item.id, available: raw.Item.quantity ?? null }
+        ? {
+          id: raw.Item.id,
+          available: raw.Item.quantity ?? null,
+          size: baseSize,
+        }
         : null,
+      baseSize,
+      perUnitMetrics,
+      totalMetrics,
     };
   }
 
-  private normalizeCardMaterials(card: any) {
-    for (const step of card.steps) {
-      for (const m of step.materials as any[]) {
-        const norm = this.enrichMaterial(m);
-        if (!m.material) m.material = norm.material;
-        if (m.quantity == null) m.quantity = norm.quantity;
-        if (!m.displayName) m.displayName = norm.material.name;
-      }
-    }
-  }
-
-  /* ---------- Техкарты / выдача ---------- */
+  /* ========= TechCards ========= */
   async listTechCards(search?: string) {
     const where = search
       ? { name: { contains: search, mode: 'insensitive' as const } }
@@ -94,20 +201,13 @@ export class TasksService {
         steps: {
           orderBy: { order: 'asc' },
           include: {
-            operation: { select: { id: true, name: true } },
+            operation: true,
             machine: { select: { id: true, name: true } },
             materials: {
               include: {
-                Item: {
-                  select: {
-                    id: true,
-                    name: true,
-                    quantity: true,
-                    fields: true,
-                  },
-                },
-                unit: { select: { id: true, unit: true } },
-                nomenclature: { select: { id: true, name: true } },
+                Item: { select: { id: true, name: true, quantity: true, fields: true } },
+                nomenclature: true,
+                unit: true,
               },
             },
             fields: true,
@@ -116,7 +216,6 @@ export class TasksService {
       },
     });
     if (!card) throw new NotFoundException('TechCard not found');
-    this.normalizeCardMaterials(card);
     return card;
   }
 
@@ -146,6 +245,7 @@ export class TasksService {
     });
   }
 
+  /* ========= Create Task with documents ========= */
   async createTaskWithDocuments(payload: {
     techCardId: number;
     name?: string;
@@ -166,31 +266,54 @@ export class TasksService {
       preGeneratePdfs = true,
     } = payload;
 
-    const techCard = await this.getTechCardDetails(techCardId);
-    if (!assignments.length) {
-      throw new BadRequestException('No assignments provided');
-    }
+    if (!assignments.length) throw new BadRequestException('No assignments provided');
 
-    const validStepIds = new Set(techCard.steps.map((s: any) => s.id));
+    const techCard = await this.prisma.techCard.findUnique({
+      where: { id: techCardId },
+      include: {
+        item: { select: { id: true, name: true } },
+        steps: {
+          orderBy: { order: 'asc' },
+          include: {
+            operation: true,
+            machine: { select: { id: true, name: true } },
+            materials: {
+              include: {
+                Item: {
+                  select: {
+                    id: true,
+                    name: true,
+                    quantity: true,
+                    fields: true,
+                  },
+                },
+                unit: true,
+                nomenclature: true,
+              },
+            },
+            fields: true,
+          },
+        },
+      },
+    });
+    if (!techCard) throw new NotFoundException('TechCard not found');
+
+    const validStepIds = new Set(techCard.steps.map(s => s.id));
     for (const a of assignments) {
       if (!validStepIds.has(a.stepId)) {
-        throw new BadRequestException(
-          `Step ${a.stepId} does not belong to TechCard ${techCardId}`,
-        );
+        throw new BadRequestException(`Step ${a.stepId} not in techCard`);
       }
     }
 
     const userSet = new Set<number>();
-    assignments.forEach((a) => {
-      (a.leadUserIds || []).forEach((u) => userSet.add(u));
-      (a.memberUserIds || []).forEach((u) => userSet.add(u));
+    assignments.forEach(a => {
+      a.leadUserIds.forEach(u => userSet.add(u));
+      a.memberUserIds.forEach(u => userSet.add(u));
     });
-    if (!userSet.size) {
-      throw new BadRequestException('No users selected for assignments');
-    }
-    const userIds = Array.from(userSet);
+    if (!userSet.size) throw new BadRequestException('No users assigned');
 
-    const result = await this.prisma.$transaction(async (tx) => {
+    const userIds = Array.from(userSet);
+    const result = await this.prisma.$transaction(async tx => {
       const task = await tx.task.create({
         data: {
           techCardId,
@@ -203,36 +326,24 @@ export class TasksService {
       });
 
       for (const a of assignments) {
-        const plannedQuantity =
-          a.plannedQuantity != null ? a.plannedQuantity : 1;
+        const pq = a.plannedQuantity != null ? a.plannedQuantity : 1;
         const stepAssignment = await tx.taskStepAssignment.create({
-          data: { taskId: task.id, stepId: a.stepId, plannedQuantity },
+          data: { taskId: task.id, stepId: a.stepId, plannedQuantity: pq },
         });
 
-        const workers: Prisma.TaskWorkerAssignmentCreateManyInput[] = [];
-        (a.leadUserIds || []).forEach((userId) =>
-          workers.push({
-            stepAssignmentId: stepAssignment.id,
-            userId,
-            role: 'LEAD',
-          }),
+        const adds: Prisma.TaskWorkerAssignmentCreateManyInput[] = [];
+        a.leadUserIds.forEach(uid =>
+          adds.push({ stepAssignmentId: stepAssignment.id, userId: uid, role: 'LEAD' }),
         );
-        (a.memberUserIds || []).forEach((userId) =>
-          workers.push({
-            stepAssignmentId: stepAssignment.id,
-            userId,
-            role: 'MEMBER',
-          }),
+        a.memberUserIds.forEach(uid =>
+          adds.push({ stepAssignmentId: stepAssignment.id, userId: uid, role: 'MEMBER' }),
         );
-        if (workers.length) {
+        if (adds.length)
           await tx.taskWorkerAssignment.createMany({
-            data: workers,
+            data: adds,
             skipDuplicates: true,
           });
-        }
       }
-
-      const shortages: any[] = [];
 
       const users = await tx.user.findMany({
         where: { id: { in: userIds } },
@@ -244,46 +355,72 @@ export class TasksService {
           role: true,
         },
       });
-
-      const userMap = new Map(users.map((u) => [u.id, u]));
-      const stepMap = new Map(techCard.steps.map((s: any) => [s.id, s]));
-
+      const userMap = new Map(users.map(u => [u.id, u]));
+      const stepMap = new Map(techCard.steps.map(s => [s.id, s]));
       const userSteps = new Map<
         number,
-        Array<{ role: 'LEAD' | 'MEMBER'; stepId: number; plannedQuantity: number }>
+        Array<{ stepId: number; plannedQuantity: number; role: 'LEAD' | 'MEMBER' }>
       >();
 
       for (const a of assignments) {
         const pq = a.plannedQuantity != null ? a.plannedQuantity : 1;
-        (a.leadUserIds || []).forEach((uid) => {
+        a.leadUserIds.forEach(uid => {
           const arr = userSteps.get(uid) || [];
-          arr.push({ role: 'LEAD', stepId: a.stepId, plannedQuantity: pq });
+          arr.push({ stepId: a.stepId, plannedQuantity: pq, role: 'LEAD' });
           userSteps.set(uid, arr);
         });
-        (a.memberUserIds || []).forEach((uid) => {
+        a.memberUserIds.forEach(uid => {
           const arr = userSteps.get(uid) || [];
-          arr.push({ role: 'MEMBER', stepId: a.stepId, plannedQuantity: pq });
+          arr.push({ stepId: a.stepId, plannedQuantity: pq, role: 'MEMBER' });
           userSteps.set(uid, arr);
         });
       }
 
-      const docsCreated: Array<{ id: number; taskId: number; userId: number }> =
-        [];
+      const docs: Array<{ id: number; taskId: number; userId: number; printable: boolean }> = [];
 
       for (const uid of userIds) {
-        const stepsForUser = (userSteps.get(uid) || []).sort((a, b) => {
-          const sa = stepMap.get(a.stepId)?.order ?? 0;
-          const sb = stepMap.get(b.stepId)?.order ?? 0;
-          return sa - sb;
-        });
+        const stepsForUser = (userSteps.get(uid) || []).sort(
+          (a, b) =>
+            (stepMap.get(a.stepId)?.order ?? 0) -
+            (stepMap.get(b.stepId)?.order ?? 0),
+        );
         const u = userMap.get(uid);
+        const printable = !PRINT_SKIP_ROLES.includes(u?.role as UserRole);
+
+        const contentSteps = stepsForUser.map(info => {
+          const step = stepMap.get(info.stepId)!;
+          const invMode = this.classifyInventoryStep(step);
+          const mats = step.materials.map(m =>
+            this.enrichMaterial(m, info.plannedQuantity),
+          );
+          return {
+            id: step.id,
+            order: step.order,
+            name: step.name,
+            role: info.role,
+            plannedQuantity: info.plannedQuantity,
+            operation: step.operation
+              ? { id: step.operation.id, name: step.operation.name }
+              : null,
+            machine: step.machine
+              ? { id: step.machine.id, name: step.machine.name }
+              : null,
+            inventoryMode: invMode,
+            materials: mats.map(mm => ({
+              id: mm.id,
+              name: mm.material.name,
+              quantityPerRepeat: mm.quantity,
+              unit: mm.unit,
+              baseSize: mm.baseSize,
+              perUnitMetrics: mm.perUnitMetrics,
+              totalMetrics: mm.totalMetrics,
+            })),
+            fields: step.fields.map(f => ({ key: f.key, value: f.value })),
+          };
+        });
 
         const docContent = {
-          task: {
-            id: task.id,
-            name: task.name,
-            createdAt: new Date().toISOString(),
-          },
+          task: { id: task.id, name: task.name, createdAt: new Date().toISOString() },
           techCard: {
             id: techCard.id,
             name: techCard.name,
@@ -293,52 +430,35 @@ export class TasksService {
           },
           user: u
             ? {
-                id: u.id,
-                firstName: u.firstName,
-                lastName: u.lastName,
-                email: u.email,
-                role: u.role,
-              }
+              id: u.id,
+              firstName: u.firstName,
+              lastName: u.lastName,
+              email: u.email,
+              role: u.role,
+            }
             : { id: uid },
-          steps: stepsForUser.map(({ role, stepId, plannedQuantity }) => {
-            const s: any = stepMap.get(stepId);
-            return {
-              id: s.id,
-              order: s.order,
-              name: s.name,
-              role,
-              plannedQuantity,
-              operation: s.operation
-                ? { id: s.operation.id, name: s.operation.name }
-                : null,
-              machine: s.machine
-                ? { id: s.machine.id, name: s.machine.name }
-                : null,
-              materials: s.materials.map((mm: any) => this.enrichMaterial(mm)),
-              fields: s.fields.map((f: any) => ({ key: f.key, value: f.value })),
-            };
-          }),
-          shortages,
+          steps: contentSteps,
         };
 
-        const created = await tx.taskDocument.create({
+        const d = await tx.taskDocument.create({
           data: {
             taskId: task.id,
             userId: uid,
             status: 'NEW',
-            content: docContent as unknown as Prisma.JsonObject,
+            printable, // поле есть после миграции
+            content: docContent as any,
           },
-          select: { id: true, taskId: true, userId: true },
+          select: { id: true, taskId: true, userId: true, printable: true },
         });
-        docsCreated.push(created);
+        docs.push(d);
       }
 
-      return { task, documents: docsCreated, shortages };
+      return { task, docs };
     });
 
     if (preGeneratePdfs) {
       const docs = await this.prisma.taskDocument.findMany({
-        where: { taskId: result.task.id },
+        where: { taskId: result.task.id, printable: true },
         include: {
           user: {
             select: {
@@ -352,12 +472,13 @@ export class TasksService {
         },
       });
       await Promise.all(
-        docs.map((d) =>
+        docs.map(d =>
           this.renderer.ensurePdfForDocument({
             id: d.id,
             taskId: d.taskId,
             user: d.user!,
             content: d.content,
+            printable: true,
           }),
         ),
       );
@@ -365,18 +486,17 @@ export class TasksService {
 
     return {
       task: result.task,
-      documents: result.documents.map((d) => ({
+      documents: result.docs.map(d => ({
         id: d.id,
-        pdfUrl: `/task-documents/${d.id}/pdf`,
-        previewUrl: `/task-documents/${d.id}/preview`,
+        printable: d.printable,
+        pdfUrl: d.printable ? `/task-documents/${d.id}/pdf` : null,
+        previewUrl: d.printable ? `/task-documents/${d.id}/preview` : null,
       })),
       printAllUrl: `/tasks/${result.task.id}/print`,
-      shortages: result.shortages,
-      hasShortages: result.shortages.length > 0,
     };
   }
 
-  /* ---------- МОИ ЗАДАНИЯ (исправлено) ---------- */
+  /* ========= List My Tasks ========= */
   async listMyTasks(userId: number) {
     const assignments = await this.prisma.taskWorkerAssignment.findMany({
       where: { userId },
@@ -399,11 +519,7 @@ export class TasksService {
       },
     });
     if (!assignments.length) return [];
-
-    const taskIds = Array.from(
-      new Set(assignments.map((a) => a.stepAssignment.taskId)),
-    );
-
+    const taskIds = Array.from(new Set(assignments.map(a => a.stepAssignment.taskId)));
     const tasks = await this.prisma.task.findMany({
       where: { id: { in: taskIds } },
       select: {
@@ -416,40 +532,36 @@ export class TasksService {
       orderBy: { createdAt: 'desc' },
     });
 
-    const stepAssignmentIds = assignments.map((a) => a.stepAssignment.id);
-    const myResults = await this.prisma.taskStepResult.findMany({
+    const stepAssignmentIds = assignments.map(a => a.stepAssignment.id);
+    const results = await this.prisma.taskStepResult.findMany({
       where: { stepAssignmentId: { in: stepAssignmentIds } },
       select: { stepAssignmentId: true, quantity: true, notes: true },
     });
-    const resMap = new Map(myResults.map((r) => [r.stepAssignmentId, r]));
+    const resMap = new Map(results.map(r => [r.stepAssignmentId, r]));
 
-    return tasks.map((t) => {
+    return tasks.map(t => {
       const mySteps = assignments
-        .filter((a) => a.stepAssignment.taskId === t.id)
-        .map((a) => {
-          const result = resMap.get(a.stepAssignment.id);
+        .filter(a => a.stepAssignment.taskId === t.id)
+        .map(a => {
+          const r = resMap.get(a.stepAssignment.id);
           const stepData = a.stepAssignment.step;
-          const opName = stepData.operation?.name?.toLowerCase?.() || '';
-          const tentativeSupply =
-            opName.includes('склад') ||
-            opName.includes('выдать') ||
-            opName.includes('отгруз');
-          const isSupply = tentativeSupply;
+          const mode = this.classifyInventoryStep(stepData);
           return {
             stepAssignmentId: a.stepAssignment.id,
             stepId: stepData.id,
             order: stepData.order,
             name: stepData.name,
             plannedQuantity: a.stepAssignment.plannedQuantity ?? 1,
-            hasResult: !!result,
-            resultQuantity: result?.quantity ?? null,
-            resultNotes: result?.notes ?? null,
-            isSupply,
+            hasResult: !!r,
+            resultQuantity: r?.quantity ?? null,
+            resultNotes: r?.notes ?? null,
+            inventoryMode: mode,
+            isInventory: mode !== 'NONE',
           };
         })
         .sort((a, b) => a.order - b.order);
 
-      const done = mySteps.filter((s) => s.hasResult).length;
+      const done = mySteps.filter(s => s.hasResult).length;
       return {
         id: t.id,
         name: t.name,
@@ -462,6 +574,7 @@ export class TasksService {
     });
   }
 
+  /* ========= Task Details ========= */
   async getMyTaskDetails(taskId: number, userId: number) {
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
@@ -482,7 +595,7 @@ export class TasksService {
                 machine: true,
                 materials: {
                   include: {
-                    Item: { select: { id: true, name: true, quantity: true } },
+                    Item: { select: { id: true, name: true, quantity: true, fields: true } },
                     nomenclature: true,
                   },
                 },
@@ -494,30 +607,22 @@ export class TasksService {
         },
         documents: {
           where: { userId },
-          select: { id: true, status: true },
+          select: { id: true, status: true, printable: true },
         },
       },
     });
     if (!task) throw new NotFoundException('Task not found');
 
-    const myAssignments = task.stepAssignments.filter((sa) =>
-      sa.workers.some((w) => w.userId === userId),
+    const myAssignments = task.stepAssignments.filter(sa =>
+      sa.workers.some(w => w.userId === userId),
     );
-    if (!myAssignments.length) {
-      throw new ForbiddenException('You are not assigned to this task');
-    }
+    if (!myAssignments.length) throw new ForbiddenException('Not assigned');
 
     const mySteps = myAssignments
-      .map((sa) => {
+      .map(sa => {
         const step = sa.step;
         const result = sa.results[0] || null;
-        const opName = step.operation?.name?.toLowerCase?.() || '';
-        const tentativeSupply =
-          opName.includes('склад') ||
-          opName.includes('выдать') ||
-          opName.includes('отгруз');
-        const isSupply = tentativeSupply;
-
+        const mode = this.classifyInventoryStep(step);
         return {
           stepAssignmentId: sa.id,
           stepId: step.id,
@@ -530,24 +635,29 @@ export class TasksService {
           machine: step.machine
             ? { id: step.machine.id, name: step.machine.name }
             : null,
-          fields: step.fields.map((f) => ({ key: f.key, value: f.value })),
-          materials: step.materials.map((m) => ({
+          fields: step.fields.map(f => ({ key: f.key, value: f.value })),
+          materials: step.materials.map(m => ({
             id: m.id,
-            name: m.Item?.name || m.nomenclature?.name || 'Материал',
+            Item: m.Item
+              ? {
+                id: m.Item.id,
+                quantity: m.Item.quantity,
+                name: m.Item.name,
+                fields: m.Item.fields,
+              }
+              : null,
             available: m.Item?.quantity ?? null,
+            name: m.Item?.name || m.nomenclature?.name || 'Материал',
           })),
           result: result
-            ? {
-                quantity: result.quantity ?? null,
-                notes: result.notes ?? null,
-              }
+            ? { quantity: result.quantity ?? null, notes: result.notes ?? null }
             : null,
-          isSupply,
+          isInventory: mode !== 'NONE',
+          inventoryMode: mode,
         };
       })
       .sort((a, b) => a.order - b.order);
 
-    const doc = task.documents[0] || null;
     return {
       id: task.id,
       name: task.name,
@@ -555,220 +665,274 @@ export class TasksService {
       createdAt: task.createdAt,
       techCard: task.techCard,
       mySteps,
-      document: doc,
+      document: task.documents[0] || null,
     };
   }
 
+  /* ========= Inventory adjustments ========= */
+  private async adjustInventoryDelta(
+    tx: Prisma.TransactionClient,
+    stepId: number,
+    deltaQuantity: number,
+    mode: InventoryMode,
+  ) {
+    if (!deltaQuantity || mode === 'NONE') return [];
+    const materials = await tx.techStepMaterial.findMany({
+      where: { stepId },
+      include: { Item: { select: { id: true, quantity: true } } },
+    });
+
+    const changes: Array<{ itemId: number; delta: number; newQuantity: number }> = [];
+    for (const m of materials) {
+      if (!m.Item) continue;
+      const perUnit = 1; // TODO: расширить если появится множитель
+      const need = Math.abs(deltaQuantity) * perUnit;
+      const current = m.Item.quantity ?? 0;
+
+      if (mode === 'ISSUE') {
+        if (deltaQuantity > 0) {
+          if (current < need)
+            throw new BadRequestException(
+              `Недостаточно остатка (item=${m.Item.id}) нужно ${need}, есть ${current}`,
+            );
+          const upd = await tx.item.update({
+            where: { id: m.Item.id },
+            data: { quantity: current - need },
+            select: { id: true, quantity: true },
+          });
+          changes.push({ itemId: upd.id, delta: -need, newQuantity: upd.quantity });
+        } else {
+          const upd = await tx.item.update({
+            where: { id: m.Item.id },
+            data: { quantity: current + need },
+            select: { id: true, quantity: true },
+          });
+          changes.push({ itemId: upd.id, delta: need, newQuantity: upd.quantity });
+        }
+      } else if (mode === 'RECEIVE') {
+        if (deltaQuantity > 0) {
+          const upd = await tx.item.update({
+            where: { id: m.Item.id },
+            data: { quantity: current + need },
+            select: { id: true, quantity: true },
+          });
+          changes.push({ itemId: upd.id, delta: need, newQuantity: upd.quantity });
+        } else {
+          if (current < need)
+            throw new BadRequestException(
+              `Нельзя уменьшить (item=${m.Item.id}) на ${need}, есть ${current}`,
+            );
+          const upd = await tx.item.update({
+            where: { id: m.Item.id },
+            data: { quantity: current - need },
+            select: { id: true, quantity: true },
+          });
+          changes.push({ itemId: upd.id, delta: -need, newQuantity: upd.quantity });
+        }
+      }
+    }
+    return changes;
+  }
+
+  /* ========= Submit Step ========= */
   async submitMyStepResult(
     userId: number,
     stepAssignmentId: number,
     body: { quantity?: number; notes?: string },
   ) {
-    const sa = await this.prisma.taskStepAssignment.findUnique({
-      where: { id: stepAssignmentId },
-      include: {
-        workers: true,
-        task: {
-          include: {
-            documents: { where: { userId }, select: { id: true, status: true } },
-            stepAssignments: {
-              include: { workers: true, results: true },
+    return this.prisma.$transaction(async tx => {
+      const sa = await tx.taskStepAssignment.findUnique({
+        where: { id: stepAssignmentId },
+        include: {
+          workers: { include: { user: { select: { id: true, role: true } } } },
+          step: {
+            include: {
+              materials: {
+                include: { Item: { select: { id: true, quantity: true } } },
+              },
+              operation: true,
             },
           },
-        },
-      },
-    });
-    if (!sa) throw new NotFoundException('Step assignment not found');
-    if (!sa.workers.some((w) => w.userId === userId)) {
-      throw new ForbiddenException('Not your step');
-    }
-
-    let report = await this.prisma.taskReport.findUnique({
-      where: { taskId: sa.taskId },
-    });
-    if (!report) {
-      report = await this.prisma.taskReport.create({
-        data: { taskId: sa.taskId },
-      });
-    }
-
-    const quantity =
-      body.quantity != null && body.quantity >= 0 ? body.quantity : null;
-
-    const existing = await this.prisma.taskStepResult.findFirst({
-      where: { stepAssignmentId },
-    });
-
-    let result;
-    if (existing) {
-      result = await this.prisma.taskStepResult.update({
-        where: { id: existing.id },
-        data: { quantity, notes: body.notes ?? existing.notes ?? null },
-      });
-    } else {
-      result = await this.prisma.taskStepResult.create({
-        data: {
-          taskReportId: report.id,
-          stepAssignmentId,
-          quantity,
-          notes: body.notes ?? null,
+          task: {
+            include: {
+              documents: {
+                where: { userId },
+                select: { id: true, status: true, printable: true },
+              },
+              stepAssignments: { include: { workers: true, results: true } },
+            },
+          },
+          results: true,
         },
       });
-    }
+      if (!sa) throw new NotFoundException('Step assignment not found');
+      if (!sa.workers.some(w => w.userId === userId))
+        throw new ForbiddenException('Not your step');
 
-    const myAssignments = sa.task.stepAssignments.filter((a) =>
-      a.workers.some((w) => w.userId === userId),
-    );
-    const myDone = await this.prisma.taskStepResult.count({
-      where: { stepAssignmentId: { in: myAssignments.map((a) => a.id) } },
+      const userRole = sa.workers.find(w => w.userId === userId)?.user?.role;
+      const mode = this.classifyInventoryStep(sa.step);
+      const canAdjust = this.canInventoryActor(userRole);
+      const hasMaterials = sa.step.materials.length > 0;
+
+      let report = await tx.taskReport.findUnique({ where: { taskId: sa.taskId } });
+      if (!report) {
+        report = await tx.taskReport.create({ data: { taskId: sa.taskId } });
+      }
+
+      const newQuantity =
+        body.quantity != null && body.quantity >= 0 ? body.quantity : null;
+      const existing = sa.results[0] || null;
+      const prevQuantity = existing?.quantity ?? 0;
+      const target = newQuantity ?? 0;
+      const delta = target - prevQuantity;
+
+      let inventoryChanges: Array<{ itemId: number; delta: number; newQuantity: number }> = [];
+      if (delta !== 0 && canAdjust && mode !== 'NONE' && hasMaterials) {
+        inventoryChanges = await this.adjustInventoryDelta(tx, sa.stepId, delta, mode);
+      }
+
+      let resultRec;
+      if (existing) {
+        resultRec = await tx.taskStepResult.update({
+          where: { id: existing.id },
+          data: {
+            quantity: newQuantity,
+            notes: body.notes != null ? body.notes : existing.notes ?? null,
+          },
+        });
+      } else {
+        resultRec = await tx.taskStepResult.create({
+          data: {
+            taskReportId: report.id,
+            stepAssignmentId,
+            quantity: newQuantity,
+            notes: body.notes ?? null,
+          },
+        });
+      }
+
+      const myAssignments = sa.task.stepAssignments.filter(a =>
+        a.workers.some(w => w.userId === userId),
+      );
+      const myDone = await tx.taskStepResult.count({
+        where: { stepAssignmentId: { in: myAssignments.map(a => a.id) } },
+      });
+      const allMyStepsCompleted = myDone === myAssignments.length;
+
+      let document = sa.task.documents[0] || null;
+      if (document && document.printable) {
+        if (allMyStepsCompleted && document.status !== 'DONE') {
+          document = await tx.taskDocument.update({
+            where: { id: document.id },
+            data: { status: 'DONE' },
+            select: { id: true, status: true, printable: true },
+          });
+        } else if (document.status === 'NEW') {
+          document = await tx.taskDocument.update({
+            where: { id: document.id },
+            data: { status: 'IN_PROGRESS' },
+            select: { id: true, status: true, printable: true },
+          });
+        }
+      }
+
+      return {
+        ok: true,
+        stepAssignmentId,
+        result: {
+          quantity: resultRec.quantity,
+          notes: resultRec.notes,
+        },
+        document,
+        inventoryMode: mode,
+        allMyStepsCompleted,
+        inventoryChanges,
+      };
     });
-    const allMyStepsCompleted = myDone === myAssignments.length;
-
-    let document = sa.task.documents[0] || null;
-    if (document && allMyStepsCompleted && document.status !== 'DONE') {
-      document = await this.prisma.taskDocument.update({
-        where: { id: document.id },
-        data: { status: 'DONE' },
-        select: { id: true, status: true },
-      });
-    } else if (document && document.status === 'NEW') {
-      document = await this.prisma.taskDocument.update({
-        where: { id: document.id },
-        data: { status: 'IN_PROGRESS' },
-        select: { id: true, status: true },
-      });
-    }
-
-    return {
-      ok: true,
-      stepAssignmentId,
-      result: { quantity: result.quantity, notes: result.notes },
-      document,
-      allMyStepsCompleted,
-    };
   }
 
+  /* ========= Quick warehouse issue (fast complete ISSUE step) ========= */
   async issueWarehouseStep(
     userId: number,
     stepAssignmentId: number,
-    body?: { notes?: string },
+    body: { notes?: string } = {},
   ) {
-    const sa = await this.prisma.taskStepAssignment.findUnique({
+    const assignment = await this.prisma.taskStepAssignment.findUnique({
       where: { id: stepAssignmentId },
       include: {
-        workers: {
-          include: { user: { select: { id: true, role: true } } },
-        },
-        task: {
+        step: {
           include: {
-            documents: { where: { userId }, select: { id: true, status: true } },
-            stepAssignments: { include: { workers: true, results: true } },
+            materials: {
+              include: { Item: { select: { id: true, quantity: true } } },
+            },
+            operation: true,
           },
         },
-        step: {
-          include: { operation: true, fields: true },
+        workers: {
+          include: {
+            user: { select: { id: true, role: true } },
+          },
         },
       },
     });
-    if (!sa) throw new NotFoundException('Step assignment not found');
-    if (!sa.workers.some((w) => w.userId === userId)) {
-      throw new ForbiddenException('Not your step');
+    if (!assignment) throw new NotFoundException('Step assignment not found');
+    if (!assignment.workers.some(w => w.userId === userId)) {
+      throw new ForbiddenException('Not assigned to this step');
     }
-    const myWorker = sa.workers.find((w) => w.userId === userId);
-    const userRole = myWorker?.user?.role;
-    if (userRole !== 'WAREHOUSE') {
-      throw new ForbiddenException('Only warehouse role can issue directly');
+    const actorRole = assignment.workers.find(w => w.userId === userId)?.user?.role;
+    if (!['WAREHOUSE', 'SELLER'].includes(actorRole as string)) {
+      throw new ForbiddenException('Fast issue only for warehouse/seller');
     }
-
-    const plannedQuantity = sa.plannedQuantity ?? 1;
-
-    let report = await this.prisma.taskReport.findUnique({
-      where: { taskId: sa.taskId },
+    const invMode = this.classifyInventoryStep(assignment.step);
+    if (invMode !== 'ISSUE') {
+      throw new BadRequestException('Step is not an inventory ISSUE step');
+    }
+    const qty = assignment.plannedQuantity ?? 1;
+    return this.submitMyStepResult(userId, stepAssignmentId, {
+      quantity: qty,
+      notes: body.notes || `Автовыдача ${qty}`,
     });
-    if (!report) {
-      report = await this.prisma.taskReport.create({
-        data: { taskId: sa.taskId },
-      });
-    }
-
-    const existing = await this.prisma.taskStepResult.findFirst({
-      where: { stepAssignmentId },
-    });
-    const notes =
-      body?.notes?.trim() || `Выдано со склада (план: ${plannedQuantity})`;
-
-    let result;
-    if (existing) {
-      result = await this.prisma.taskStepResult.update({
-        where: { id: existing.id },
-        data: { quantity: plannedQuantity, notes },
-      });
-    } else {
-      result = await this.prisma.taskStepResult.create({
-        data: {
-          taskReportId: report.id,
-          stepAssignmentId,
-          quantity: plannedQuantity,
-          notes,
-        },
-      });
-    }
-
-    const myAssignments = sa.task.stepAssignments.filter((a) =>
-      a.workers.some((w) => w.userId === userId),
-    );
-    const myDone = await this.prisma.taskStepResult.count({
-      where: { stepAssignmentId: { in: myAssignments.map((a) => a.id) } },
-    });
-    const allMyStepsCompleted = myDone === myAssignments.length;
-
-    let document = sa.task.documents[0] || null;
-    if (document) {
-      if (allMyStepsCompleted && document.status !== 'DONE') {
-        document = await this.prisma.taskDocument.update({
-          where: { id: document.id },
-          data: { status: 'DONE' },
-          select: { id: true, status: true },
-        });
-      } else if (document.status === 'NEW') {
-        document = await this.prisma.taskDocument.update({
-          where: { id: document.id },
-          data: { status: 'IN_PROGRESS' },
-          select: { id: true, status: true },
-        });
-      }
-    }
-
-    return {
-      ok: true,
-      stepAssignmentId,
-      result: { quantity: result.quantity, notes: result.notes },
-      document,
-      allMyStepsCompleted,
-    };
   }
 
+  /* ========= Unread documents ========= */
   async countMyUnreadDocuments(userId: number) {
     const unread = await this.prisma.taskDocument.count({
-      where: { userId, status: 'NEW' },
+      where: {
+        userId,
+        status: 'NEW',
+      },
     });
     return { unread };
   }
 
+  /* ========= Mark document viewed ========= */
   async markDocumentViewed(userId: number, documentId: number) {
     const doc = await this.prisma.taskDocument.findUnique({
       where: { id: documentId },
-      select: { id: true, userId: true, status: true },
+      select: { id: true, userId: true, status: true, printable: true },
     });
     if (!doc) throw new NotFoundException('Document not found');
     if (doc.userId !== userId) throw new ForbiddenException('Not your document');
+
+    let updated = doc;
     if (doc.status === 'NEW') {
-      return this.prisma.taskDocument.update({
+      updated = await this.prisma.taskDocument.update({
         where: { id: doc.id },
         data: { status: 'IN_PROGRESS' },
-        select: { id: true, status: true },
+        select: { id: true, userId: true, status: true, printable: true },
       });
     }
-    return doc;
+
+    const unread = await this.prisma.taskDocument.count({
+      where: { userId, status: 'NEW' },
+    });
+
+    return {
+      ok: true,
+      id: updated.id,
+      status: updated.status,
+      unread,
+      printable: updated.printable,
+    };
   }
 }

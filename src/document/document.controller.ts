@@ -18,18 +18,25 @@ export class DocumentController {
             where: { id },
             include: {
                 task: { select: { id: true, name: true } },
-                user: { select: { id: true, firstName: true, lastName: true, email: true, role: true } },
+                user: {
+                    select: {
+                        id: true,
+                        firstName: true,
+                        lastName: true,
+                        email: true,
+                        role: true,
+                    },
+                },
             },
         });
         if (!doc) return 'Not found';
-
-        const html = await this.renderer.renderSingleHtml({
+        return this.renderer.renderSingleHtml({
             id: doc.id,
             taskId: doc.taskId,
             user: doc.user!,
             content: doc.content,
+            printable: doc.printable,
         });
-        return html;
     }
 
     @Get('task-documents/:id/pdf')
@@ -37,23 +44,37 @@ export class DocumentController {
         const doc = await this.prisma.taskDocument.findUnique({
             where: { id },
             include: {
-                user: { select: { id: true, firstName: true, lastName: true, email: true, role: true } },
+                user: {
+                    select: {
+                        id: true,
+                        firstName: true,
+                        lastName: true,
+                        email: true,
+                        role: true,
+                    },
+                },
             },
         });
         if (!doc) {
             res.status(404).send('Not found');
             return;
         }
-
+        if (!doc.printable) {
+            res.status(403).send('PDF disabled for this document');
+            return;
+        }
         const pdfPath = await this.renderer.ensurePdfForDocument({
             id: doc.id,
             taskId: doc.taskId,
             user: doc.user!,
             content: doc.content,
+            printable: doc.printable,
         });
-
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `inline; filename="task-${doc.taskId}-doc-${doc.id}.pdf"`);
+        res.setHeader(
+            'Content-Disposition',
+            `inline; filename="task-${doc.taskId}-doc-${doc.id}.pdf"`,
+        );
         fs.createReadStream(pdfPath).pipe(res);
     }
 
@@ -65,7 +86,15 @@ export class DocumentController {
             include: {
                 documents: {
                     include: {
-                        user: { select: { id: true, firstName: true, lastName: true, email: true, role: true } },
+                        user: {
+                            select: {
+                                id: true,
+                                firstName: true,
+                                lastName: true,
+                                email: true,
+                                role: true,
+                            },
+                        },
                     },
                     orderBy: { id: 'asc' },
                 },
@@ -73,15 +102,17 @@ export class DocumentController {
         });
         if (!task) return 'Not found';
 
-        const html = await this.renderer.renderPrintAllHtml({
+        const printableDocs = task.documents.filter(d => d.printable);
+
+        return this.renderer.renderPrintAllHtml({
             id: task.id,
             name: task.name,
-            documents: task.documents.map((d) => ({
+            documents: printableDocs.map(d => ({
                 id: d.id,
                 user: d.user!,
                 content: d.content,
+                printable: d.printable,
             })),
         });
-        return html;
     }
 }

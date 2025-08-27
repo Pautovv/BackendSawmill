@@ -4,21 +4,23 @@
   <meta charset="utf-8" />
   <title>Задание <%= task?.name %> — <%= user?.lastName %> <%= user?.firstName %></title>
   <style>
-    @page { size: A4; margin: 15mm 12mm; }
-    body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; color:#111; }
+    @page { size:A4; margin:15mm 12mm; }
+    body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; color:#111; font-size:13px; }
     h1,h2,h3 { margin:0 0 8px; }
     .muted { color:#666; font-size:12px; }
     .row { display:flex; gap:16px; align-items:flex-start; }
-    .card { border:1px solid #ddd; border-radius:12px; padding:12px 14px; margin:10px 0; }
-    .chip { display:inline-block; border-radius:999px; border:1px solid #e5e5e5; padding:2px 8px; font-size:12px; background:#fafafa; }
+    .card { border:1px solid #ddd; border-radius:12px; padding:12px 14px; margin:14px 0; }
+    .chip { display:inline-block; border-radius:999px; border:1px solid #e5e5e5; padding:2px 8px; font-size:11px; background:#fafafa; margin-right:4px; margin-bottom:4px; }
     table { width:100%; border-collapse:collapse; margin-top:6px; }
-    th,td { border:1px solid #ddd; padding:6px 8px; font-size:13px; vertical-align:top; }
+    th,td { border:1px solid #ddd; padding:5px 6px; font-size:12px; vertical-align:top; }
     th { background:#f7f7f7; text-align:left; }
+    .line { display:inline-block; min-width:140px; border-bottom:1px solid #444; height:14px; vertical-align:baseline; }
+    .time-row { margin-top:8px; font-size:11px; color:#333; }
   </style>
 </head>
 <body>
   <div>
-    <h2>Задание: <%= task?.name %></h2>
+    <h2 style="margin:0 0 4px;">Задание: <%= task?.name %></h2>
     <div class="muted">
       Документ #<%= documentId %> • Пользователь:
       <%= user?.lastName %> <%= user?.firstName %> (<%= user?.role %>)
@@ -33,20 +35,20 @@
     <% if (steps && steps.length) { %>
       <% steps.forEach(function(s){ %>
         <div class="card">
-          <div class="row" style="justify-content:space-between;">
+          <div class="row" style="justify-content:space-between; flex-wrap:wrap;">
             <div>
               <div><strong>Шаг <%= s.order %>. <%= s.name %></strong></div>
-              <div class="muted">
+              <div class="muted" style="margin-top:4px;">
                 <% if (s.operation) { %><span class="chip">Операция: <%= s.operation.name %></span><% } %>
                 <% if (s.machine) { %><span class="chip">Станок: <%= s.machine.name %></span><% } %>
                 <span class="chip">Роль: <%= s.role === 'LEAD' ? 'Главный' : 'Участник' %></span>
-                <span class="chip">Кол-во повторов: <%= s.plannedQuantity %></span>
+                <span class="chip">Повторы: <%= s.plannedQuantity %></span>
               </div>
             </div>
           </div>
 
           <% if (s.fields && s.fields.length) { %>
-            <div style="margin-top:8px">
+            <div style="margin-top:6px">
               <table>
                 <thead><tr><th>Параметр</th><th>Значение</th></tr></thead>
                 <tbody>
@@ -61,22 +63,47 @@
           <% if (s.materials && s.materials.length) { %>
             <div style="margin-top:8px">
               <table>
-                <thead><tr><th>Материал</th><th>Кол-во</th></tr></thead>
+                <thead>
+                  <tr>
+                    <th style="width:30%">Материал</th>
+                    <th>Размер</th>
+                    <th>На повтор (шт)</th>
+                    <th>Всего (шт)</th>
+                    <th>Пог.м (итог)</th>
+                    <th>м³ (итог)</th>
+                    <th>м² (итог)</th>
+                  </tr>
+                </thead>
                 <tbody>
-                  <% s.materials.forEach(function(m){ %>
+                  <% s.materials.forEach(function(m){
+                       const totalCount = (m.quantityPerRepeat || 1) * (s.plannedQuantity || 1);
+                  %>
                     <tr>
-                      <td><%= (m.material && m.material.name) || m.name || 'Материал' %></td>
-                      <td><%= m.quantity || 1 %> <%= m.unit?.unit || '' %></td>
+                      <td><%= m.name %></td>
+                      <td><%= m.baseSize || '' %></td>
+                      <td><%= m.quantityPerRepeat || 1 %></td>
+                      <td><%= totalCount %></td>
+                      <td><%= m.totalMetrics?.lm ?? '' %></td>
+                      <td><%= m.totalMetrics?.m3 ?? '' %></td>
+                      <td><%= m.totalMetrics?.m2 ?? '' %></td>
                     </tr>
                   <% }) %>
                 </tbody>
               </table>
             </div>
+          <% } else { %>
+            <div class="muted" style="margin-top:4px;">Материалы не указаны</div>
           <% } %>
+
+          <div class="time-row">
+            Начал в: <span class="line"></span>
+            &nbsp;&nbsp;Закончил в: <span class="line"></span>
+            &nbsp;&nbsp;Подпись: <span class="line" style="min-width:120px;"></span>
+          </div>
         </div>
       <% }) %>
     <% } else { %>
-      <div class="muted">Для пользователя нет назначенных шагов.</div>
+      <div class="muted">Шаги отсутствуют.</div>
     <% } %>
   </div>
 </body>
