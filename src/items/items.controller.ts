@@ -45,7 +45,7 @@ export class ItemController {
       fields: { key: string; value: string }[];
       warehouseId: number;
       shelfId: number;
-      quantity: number; // теперь ОБЯЗАТЕЛЬНО
+      quantity: number;
     },
   ) {
     if (body.quantity == null) {
@@ -54,6 +54,7 @@ export class ItemController {
     return this.itemService.create(body);
   }
 
+  // Полное перемещение (старый способ) — просто смена локации
   @Patch(':id')
   updateLocation(
     @Param('id', ParseIntPipe) id: number,
@@ -65,12 +66,23 @@ export class ItemController {
     return this.itemService.move(id, body.warehouseId, body.shelfId);
   }
 
+  // Дублирующий маршрут (оставляешь если используется где-то ещё)
   @Patch(':id/move')
   move(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: { warehouseId: number; shelfId: number },
   ) {
     return this.itemService.move(id, body.warehouseId, body.shelfId);
+  }
+
+  // НОВОЕ: частичное перемещение
+  @Post(':id/move-partial')
+  movePartial(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { warehouseId: number; shelfId: number; quantity: number },
+  ) {
+    if (body.quantity == null) throw new BadRequestException('quantity required');
+    return this.itemService.movePartial(id, body.warehouseId, body.shelfId, body.quantity);
   }
 
   @Patch(':id/quantity')

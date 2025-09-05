@@ -161,4 +161,125 @@ export class ItemService {
             },
         });
     }
+
+    /**
+     * Частичное перемещение части количества.
+     * Возвращает:
+     * {
+     *   source: обновлённый исходный item,
+     *   target: новый или увеличенный целевой item
+     * }
+     */
+    async movePartial(itemId: number, warehouseId: number, shelfId: number, quantity: number) {
+        if (!warehouseId) throw new BadRequestException('warehouseId required');
+        if (!shelfId) throw new BadRequestException('shelfId required');
+        if (quantity == null) throw new BadRequestException('quantity required');
+        if (quantity <= 0) throw new BadRequestException('quantity must be > 0');
+
+        const shelf = await this.prisma.shelf.findUnique({ where: { id: shelfId } });
+        if (!shelf) throw new BadRequestException('shelf not found');
+        if (shelf.warehouseId !== warehouseId) {
+            throw new BadRequestException('shelf and warehouse mismatch');
+        }
+
+        return this.prisma.$transaction(async (tx) => {
+            const source = await tx.item.findUnique({
+                where: { id: itemId },
+                include: { fields: true },
+            });
+            if (!source) throw new NotFoundException('item not found');
+
+            if (source.quantity < quantity) {
+                throw new BadRequestException('not enough quantity');
+            }
+
+            // Полное перемещение – просто переиспользуем move
+            if (source.quantity === quantity) {
+                const moved = await tx.item.update({
+                    where: { id: source.id },
+                    data: { warehouseId, shelfId },
+                    include: {
+                        fields: true,
+                        warehouse: this.warehouseInclude(),
+                        shelf: true,
+                    },
+                });
+                return { source: moved, target: moved, fullMove: true };
+            }
+
+            // Частичное. Попытаемся найти совместимый целевой.
+            // Критерий: такое же name + categoryId + (совпадающий набор полей по key/value).
+            // Если нужен другой критерий — скорректируй.
+            const candidateItems = await tx.item.findMany({
+                where: {
+                    name: source.name,
+                    categoryId: source.categoryId,
+                    warehouseId,
+                    shelfId,
+                },
+                include: { fields: true },
+            });
+
+            const normalizeFields = (fs: { key: string; value: string }[]) =>
+                [...fs]
+                    .map(f => ({ k: f.key.trim().toLowerCase(), v: f.value.trim() }))
+                    .sort((a, b) => (a.k + a.v).localeCompare(b.k + b.v));
+
+            const sourceNorm = normalizeFields(source.fields);
+
+            let target = candidateItems.find(ci => {
+                const ciNorm = normalizeFields(ci.fields);
+                if (ciNorm.length !== sourceNorm.length) return false;
+                return ciNorm.every((f, i) => f.k === sourceNorm[i].k && f.v === sourceNorm[i].v);
+            });
+
+            // Уменьшаем исходный
+            const updatedSource = await tx.item.update({
+                where: { id: source.id },
+                data: { quantity: source.quantity - quantity },
+                include: {
+                    fields: true,
+                    warehouse: this.warehouseInclude(),
+                    shelf: true,
+                },
+            });
+
+            if (target) {
+                // Увеличиваем существующий целевой
+                target = await tx.item.update({
+                    where: { id: target.id },
+                    data: { quantity: target.quantity + quantity },
+                    include: {
+                        fields: true,
+                        warehouse: this.warehouseInclude(),
+                        shelf: true,
+                    },
+                });
+            } else {
+                // Создаём новый целевой
+                target = await tx.item.create({
+                    data: {
+                        name: source.name,
+                        categoryId: source.categoryId,
+                        warehouseId,
+                        shelfId,
+                        quantity,
+                        fields: {
+                            create: source.fields.map(f => ({
+                                key: f.key,
+                                value: f.value,
+                            })),
+                        },
+                    },
+                    include: {
+                        fields: true,
+                        warehouse: this.warehouseInclude(),
+                        shelf: true,
+                    },
+                });
+            }
+
+            return { source: updatedSource, target, fullMove: false };
+        });
+    }
 }

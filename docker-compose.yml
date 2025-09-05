@@ -1,17 +1,15 @@
-name: lspk
+name: sawmill_db
 services:
   db:
     image: postgres:latest
-    container_name: lspk-postgres
+    restart: always
     environment: 
       POSTGRES_USER: root
       POSTGRES_PASSWORD: root
-      POSTGRES_DB: lspkdb
+      POSTGRES_DB: sawmill_db
     ports:
-      - 5432:5432
-    expose:
-      - 5432
+      - 5434:5432
     volumes:
-      - lspk-postgres-volume:/var/lib/postgresql/data
+      - sawmill_database:/var/lib/postgresql/data
 volumes:
-  lspk-postgres-volume:
+  sawmill_database:
